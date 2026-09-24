@@ -1,8 +1,9 @@
-// The coding agent: a model (OpenRouter) that calls tools on the in-browser workspace until the task is done.
+// The coding agent: a model (OpenRouter) that calls tools on its workspace (browser or Mac) until the task is done.
 // Emits the same stream events the chat UI already renders (token / think / tool_call / tool_result / done / error).
 
 import { streamCompletion, ProviderError } from "./openrouter";
 import { Checkpoint, openAITools, runTool, toolKind } from "./tools";
+import type { Workspace } from "./workspace";
 
 export type ApprovalMode = "auto" | "commands" | "all";   // ask for nothing / for commands only / for edits and commands
 export interface AgentEvent { type: "token" | "think" | "tool_call" | "tool_result" | "done" | "error"; data: string }
@@ -10,19 +11,18 @@ export interface AgentEvent { type: "token" | "think" | "tool_call" | "tool_resu
 const MAX_STEPS = 40;
 const MAX_TOOL_RESULT = 12_000;
 
-const SYSTEM = `You are EdgeRunner, a coding agent. You work in a project workspace that runs inside the user's browser \
-(a WebContainer): Node.js 22, npm/npx and a POSIX-like shell with common commands. There is no Python, no git binary, \
-no sudo/apt, and no access to the user's own files outside this workspace. Workspace root: /home/workspace.
+function system(ws: Workspace): string {
+  return `You are EdgeRunner, a coding agent. ${ws.describe()}
 
 How to work:
 - Look before you change: list_files and read_file the relevant code first.
 - Prefer edit_file for small changes; write_file for new files. Keep edits minimal and in the project's style.
 - After changes, verify: run the build, tests or the script with run_command. If something fails, read the error and fix it.
 - Dev servers and watchers never exit: run them with run_command background=true (e.g. npm run dev), never in the foreground.
-- Web apps: prefer Vite; it runs well here. Native modules and Python tools are not available.
 - Never invent command output or file contents. If you can't do something here, say so plainly.
 - When done, reply with a short summary: what changed (files), how you verified it, and anything left for the user.
 Keep replies concise; use Markdown.`;
+}
 
 /** Pending approvals: the UI resolves them with decide(). */
 const pending = new Map<string, (ok: boolean) => void>();
@@ -39,12 +39,12 @@ export async function undoRun(runId: string): Promise<string[]> {
 }
 
 export async function* runAgent(opts: {
-  model: string; history: { role: string; content: string }[]; runId: string;
+  model: string; history: { role: string; content: string }[]; runId: string; workspace: Workspace;
   approval: ApprovalMode; signal?: AbortSignal; temperature?: number; maxTokens?: number;
 }): AsyncGenerator<AgentEvent> {
-  const cp = new Checkpoint();
+  const cp = new Checkpoint(opts.workspace);
   runs.set(opts.runId, cp);
-  const messages: any[] = [{ role: "system", content: SYSTEM }, ...opts.history.filter((m) => m.role !== "system")];
+  const messages: any[] = [{ role: "system", content: system(opts.workspace) }, ...opts.history.filter((m) => m.role !== "system")];
   try {
     for (let step = 0; step < MAX_STEPS; step++) {
       let text = "";
@@ -85,7 +85,7 @@ export async function* runAgent(opts: {
             }
           }
           yield { type: "tool_call", data: JSON.stringify({ ...base, status: "running" }) };
-          outcome = await runTool(call.name, args, cp, opts.signal);
+          outcome = await runTool(opts.workspace, call.name, args, cp, opts.signal);
         }
         yield { type: "tool_result", data: JSON.stringify({ ...base, status: outcome.ok ? "done" : "failed", result: outcome.result, diff: outcome.diff }) };
         const r = outcome.result.length > MAX_TOOL_RESULT ? outcome.result.slice(0, MAX_TOOL_RESULT) + "\n… [cut]" : outcome.result;

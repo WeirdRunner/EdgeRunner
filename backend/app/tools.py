@@ -11,6 +11,7 @@ names or keys a model generates.
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -99,9 +100,15 @@ def sanitize_shell_command(raw_cmd: str) -> str:
 
         break
 
-    # Strip outer matching wrapper quotes if present
+    # Strip wrapper quotes only when the whole command is one quoted string ("ls -la"), not when it merely
+    # starts and ends with quoted words ('/path with space/python' -c '…').
     if (cmd.startswith('"') and cmd.endswith('"')) or (cmd.startswith("'") and cmd.endswith("'")):
-        cmd = cmd[1:-1].strip()
+        try:
+            whole = len(shlex.split(cmd)) == 1
+        except ValueError:
+            whole = False
+        if whole:
+            cmd = cmd[1:-1].strip()
     return cmd.strip()
 
 
@@ -236,7 +243,7 @@ def _python_func(args: dict | str) -> str:
     code = _extract_command(args)
     if not code:
         return "error: no code provided"
-    py_exec = sys.executable or "python3"
+    py_exec = shlex.quote(sys.executable or "python3")
     escaped_code = code.replace("'", "'\"'\"'")
     out, code_ret = run_command(f"{py_exec} -c '{escaped_code}'")
     if code_ret != 0:
@@ -816,9 +823,9 @@ def _run_skill_func(args: dict | str) -> str:
     temp_script = workspace / f".skill_{name}.py"
     temp_script.write_text(skill["script"], encoding="utf-8")
 
-    escaped_args = " ".join([f"'{a.replace('\'', '\'\"\'\"\'')}'" for a in skill_args])
-    py_exec = sys.executable or "python3"
-    cmd = f"{py_exec} {temp_script.name} {escaped_args}"
+    escaped_args = " ".join(shlex.quote(a) for a in skill_args)
+    py_exec = shlex.quote(sys.executable or "python3")
+    cmd = f"{py_exec} {shlex.quote(temp_script.name)} {escaped_args}"
     out = _terminal_func(cmd)
     temp_script.unlink(missing_ok=True)
     return f"[Skill: {name} Output]\n{out}"
@@ -1202,8 +1209,8 @@ def _create_custom_tool_func(args: dict | str) -> str:
         temp_file.write_text(script, encoding="utf-8")
         raw_str = json.dumps(tool_args) if isinstance(tool_args, dict) else str(tool_args)
         escaped_args = raw_str.replace("'", "'\"'\"'")
-        py_exec = sys.executable or "python3"
-        out = _terminal_func(f"{py_exec} {temp_file.name} '{escaped_args}'")
+        py_exec = shlex.quote(sys.executable or "python3")
+        out = _terminal_func(f"{py_exec} {shlex.quote(temp_file.name)} '{escaped_args}'")
         temp_file.unlink(missing_ok=True)
         return out
 
@@ -1232,8 +1239,8 @@ def _update_tool_func(args: dict | str) -> str:
             temp_file.write_text(new_script, encoding="utf-8")
             raw_str = json.dumps(tool_args) if isinstance(tool_args, dict) else str(tool_args)
             escaped_args = raw_str.replace("'", "'\"'\"'")
-            py_exec = sys.executable or "python3"
-            out = _terminal_func(f"{py_exec} {temp_file.name} '{escaped_args}'")
+            py_exec = shlex.quote(sys.executable or "python3")
+            out = _terminal_func(f"{py_exec} {shlex.quote(temp_file.name)} '{escaped_args}'")
             temp_file.unlink(missing_ok=True)
             return out
         _ALIASES[name] = updated_runner

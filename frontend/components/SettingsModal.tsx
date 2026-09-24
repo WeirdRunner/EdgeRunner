@@ -6,6 +6,7 @@ import { type UseBackend } from "@/lib/useBackend";
 import { type Settings } from "@/lib/storage";
 import { OpenRouterKey } from "./OpenRouterPanel";
 import { SecretField } from "./SecretField";
+import { NodeSettings } from "./NodeSettings";
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -253,6 +254,8 @@ export function SettingsModal({
                   )}
                 </div>
               </div>
+
+              <NodeSettings settings={settings} onSettingsChange={onSettingsChange} />
 
               {/* GitHub token */}
               <div className="rounded-lg border border-term-border bg-term-panel/40 p-4 space-y-3">

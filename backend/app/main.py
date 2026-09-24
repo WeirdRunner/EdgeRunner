@@ -15,8 +15,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__, workspace
 from app.core import store
-from app.core.auth import TokenAuth, allowed_origins
-from app.routers import catalog, chat, files, models, passthrough, session, terminal
+from app.core.auth import PrivateNetworkAccess, TokenAuth, allowed_origins
+from app.routers import catalog, chat, files, models, node, passthrough, session, terminal
 
 
 def _truthy(value: str | None) -> bool:
@@ -29,7 +29,7 @@ async def lifespan(app: FastAPI):
     workspace.ensure_workspace()
     if not os.getenv("EDGERUNNER_NO_AUTH"):
         print(f"\n  EdgeRunner edge node — access token: {store.load()['token']}\n"
-              f"  (paste it into EdgeRunner → Settings → Connection; stored in {store.HOME / 'config.json'})\n", flush=True)
+              f"  (paste it into EdgeRunner → ⚙ Settings → Mac node; stored in {store.HOME / 'config.json'})\n", flush=True)
 
     # Only the Kaggle worker self-terminates; never the local orchestrator.
     if _truthy(os.getenv("EDGERUNNER_WATCHDOG")):
@@ -51,6 +51,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(PrivateNetworkAccess)
 
 app.include_router(catalog.router, prefix="/api")
 app.include_router(chat.router, prefix="/api")
@@ -58,6 +59,7 @@ app.include_router(models.router, prefix="/api")
 app.include_router(terminal.router, prefix="/api")
 app.include_router(files.router, prefix="/api")
 app.include_router(session.router, prefix="/api")  # worker: heartbeat/shutdown
+app.include_router(node.router, prefix="/api")  # edge node: project files + commands on this machine
 app.include_router(passthrough.router)  # /v1/* -> local llama-server
 
 

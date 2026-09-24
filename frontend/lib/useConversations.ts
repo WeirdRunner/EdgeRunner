@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getBackendBase, streamChat, type SamplingParams, type ToolEvent } from "./api";
 import { runAgent, runChat } from "./agent/agent";
 import { OR_PREFIX } from "./agent/openrouter";
+import { browserWorkspace, nodeInfo, nodeWorkspace, type Workspace } from "./agent/workspace";
 import { edge } from "./edge/runtime";
 import {
   Conversation,
@@ -14,6 +15,8 @@ import {
   loadConversations,
   loadSelectedHarness,
   loadSelectedModel,
+  loadTarget,
+  saveTarget,
   newConversation,
   saveActiveId,
   saveConversations,
@@ -30,6 +33,8 @@ export interface UseConversations {
   active: Conversation | null;
   harness: string;
   model: string;
+  target: string;
+  setTarget: (target: string) => void;
   streaming: string;
   liveTools: ToolEvent[];
   busy: boolean;
@@ -60,6 +65,9 @@ export function useConversations(
 
   const [selectedHarness, setSelectedHarness] = useState<string>(defaults.harness || "chat");
   const [selectedModel, setSelectedModel] = useState<string>(defaults.model);
+  const [selectedTarget, setSelectedTarget] = useState<string>("browser");
+  const targetRef = useRef("browser");
+  targetRef.current = selectedTarget;
 
   const [streaming, setStreaming] = useState("");
   const [liveTools, setLiveTools] = useState<ToolEvent[]>([]);
@@ -102,6 +110,7 @@ export function useConversations(
     defaultsRef.current.harness = savedHarness;
     defaultsRef.current.model = savedModel;
 
+    setSelectedTarget(activeConvo?.target || loadTarget());
     setHydrated(true);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -191,6 +200,7 @@ export function useConversations(
       setSelectedModel(convo.model);
       saveSelectedModel(convo.model);
       defaultsRef.current.model = convo.model;
+      if (convo.target) setSelectedTarget(convo.target);
     }
     setStreaming("");
     setLiveTools([]);
@@ -232,6 +242,15 @@ export function useConversations(
     [activeId, patchActive],
   );
 
+  const setTarget = useCallback(
+    (target: string) => {
+      setSelectedTarget(target);
+      saveTarget(target);
+      if (activeId) patchActive((c) => ({ ...c, target }));
+    },
+    [activeId, patchActive],
+  );
+
   // Run a generation for the given message list and append the result.
   const run = useCallback(
     async (convo: Conversation, messages: DisplayMessage[]) => {
@@ -264,13 +283,22 @@ export function useConversations(
         // OpenRouter models run here in the browser (the agent's tools act on the in-browser workspace);
         // other models go to your EdgeRunner node via /api/chat.
         const isOr = convo.model.startsWith(OR_PREFIX);
+        const target = convo.target || targetRef.current;
+        let workspace: Workspace = browserWorkspace;
+        if (isOr && convo.harness === "agent" && target.startsWith("node:")) {
+          const info = await nodeInfo();
+          const project = info.projects.find((p) => `node:${p.id}` === target);
+          if (!project) throw new Error("That Mac project isn't available any more — pick a workspace again.");
+          workspace = nodeWorkspace(project, info.sandbox);
+        }
         const source =
           isOr && convo.harness === "agent"
             ? runAgent({
                 model: convo.model,
                 history: payload,
                 runId: `run_${Date.now()}`,
-                approval: settingsRef.current.approval ?? "auto",
+                workspace,
+                approval: workspace.kind === "node" ? settingsRef.current.nodeApproval ?? "commands" : settingsRef.current.approval ?? "auto",
                 temperature: params.temperature,
                 maxTokens: Math.max(params.max_tokens ?? 0, 8192), // whole files need room
                 signal: controller.signal,
@@ -409,6 +437,7 @@ export function useConversations(
         return;
       }
 
+      if (!convo.target) convo = { ...convo, target: targetRef.current };
       const messages: DisplayMessage[] = [
         ...convo.messages,
         { role: "user", content: trimmed },
@@ -417,7 +446,7 @@ export function useConversations(
       // Optimistically append the user message right away so the UI feels instant.
       setConversations((prev) =>
         prev.map((c) =>
-          c.id === convo!.id ? { ...c, messages, updatedAt: Date.now() } : c,
+          c.id === convo!.id ? { ...c, target: convo!.target, messages, updatedAt: Date.now() } : c,
         ),
       );
 
@@ -656,6 +685,8 @@ ${focus ? `\n**Focus Area:** ${focus}` : ""}
     active,
     harness: effectiveHarness,
     model: effectiveModel,
+    target: active?.target || selectedTarget,
+    setTarget,
     streaming,
     liveTools,
     busy,

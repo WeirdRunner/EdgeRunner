@@ -27,6 +27,7 @@ import { useConversations } from "@/lib/useConversations";
 import { useKaggle } from "@/lib/useKaggle";
 import { useModelManager } from "@/lib/useModelManager";
 import { edge } from "@/lib/edge/runtime";
+import { TargetPicker } from "@/components/TargetPicker";
 
 export default function Home() {
   const [catalog, setCatalog] = useState<Catalog | null>(null);
@@ -849,7 +850,9 @@ export default function Home() {
 
       {/* Compute Rig Power Status & Toggle Button (shifted to sandbox for chat/agent) */}
       {(harness === "chat" || harness === "agent") && (
-        model.startsWith(OR_PREFIX) ? (
+        model.startsWith(OR_PREFIX) && harness === "agent" ? (
+          <TargetPicker value={chat.target} onChange={chat.setTarget} onConnect={() => setShowSettings(true)} />
+        ) : model.startsWith(OR_PREFIX) ? (
           <span
             className="flex items-center gap-1.5 rounded border border-term-border px-2 sm:px-2.5 py-0.5 text-xs text-term-dim font-semibold"
             title="Runs in this browser via OpenRouter; no compute node needed"

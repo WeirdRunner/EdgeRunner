@@ -19,6 +19,8 @@ export interface Settings {
   topP: number;
   // When the coding agent must ask first: never / before commands / before edits and commands.
   approval?: "auto" | "commands" | "all";
+  // The same for projects on the Mac node (real files: asks before commands unless changed).
+  nodeApproval?: "auto" | "commands" | "all";
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -26,6 +28,7 @@ export const DEFAULT_SETTINGS: Settings = {
   maxTokens: 1024,
   topP: 0.95,
   approval: "auto",
+  nodeApproval: "commands",
 };
 
 // Timing/throughput telemetry for one assistant response.
@@ -46,6 +49,8 @@ export interface Conversation {
   title: string;
   model: string;
   harness: string;
+  // Where the agent works: "browser" (default) or "node:<projectId>" (a project on the Mac node).
+  target?: string;
   preset?: "code" | "standard" | "minimal" | "creator";
   parentId?: string;
   forkIndex?: number;
@@ -121,6 +126,15 @@ export function loadSelectedHarness(): string | null {
 export function saveSelectedHarness(harness: string): void {
   if (!hasStorage()) return;
   window.localStorage.setItem(HARNESS_KEY, harness);
+}
+
+export function loadTarget(): string {
+  if (!hasStorage()) return "browser";
+  return window.localStorage.getItem("edgerunner.target") || "browser";
+}
+
+export function saveTarget(target: string): void {
+  if (hasStorage()) window.localStorage.setItem("edgerunner.target", target);
 }
 
 export function loadSelectedModel(): string | null {

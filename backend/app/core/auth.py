@@ -42,3 +42,24 @@ class TokenAuth(BaseHTTPMiddleware):
             return JSONResponse({"detail": "EdgeRunner needs this machine's access token (see Settings → Connection)."},
                                 status_code=401)
         return await call_next(request)
+
+
+class PrivateNetworkAccess:
+    """Lets the hosted app (https://deveshpat.github.io) reach this server on localhost: Chrome first asks the
+    server, in the CORS preflight, whether public pages may call it. Origins are still limited by CORS above."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        wants = scope["type"] == "http" and scope["method"] == "OPTIONS" and any(
+            k == b"access-control-request-private-network" for k, _ in scope["headers"])
+        if not wants:
+            return await self.app(scope, receive, send)
+
+        async def send_with_header(message):
+            if message["type"] == "http.response.start":
+                message["headers"] = [*message.get("headers", []), (b"access-control-allow-private-network", b"true")]
+            await send(message)
+
+        await self.app(scope, receive, send_with_header)

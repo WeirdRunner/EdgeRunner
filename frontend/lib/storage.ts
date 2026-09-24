@@ -16,12 +16,15 @@ export interface Settings {
   temperature: number;
   maxTokens: number;
   topP: number;
+  // When the coding agent must ask first: never / before commands / before edits and commands.
+  approval?: "auto" | "commands" | "all";
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   temperature: 0.7,
   maxTokens: 1024,
   topP: 0.95,
+  approval: "auto",
 };
 
 // Timing/throughput telemetry for one assistant response.

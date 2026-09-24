@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { getBackendBase, hasBackend, streamChat, type SamplingParams, type ToolEvent } from "./api";
 import { BROWSER_AGENT_ID, runBrowserAgent } from "./browserAgent";
+import { runAgent, runChat } from "./agent/agent";
+import { OR_PREFIX } from "./agent/openrouter";
 import { runDeepSeekHarness } from "./deepseekHarness";
 import type { BrowserToolContext } from "./browserTools";
 import { vfs, wasmShell } from "./wasmShell";
@@ -263,9 +265,13 @@ export function useConversations(
         max_tokens: settingsRef.current.maxTokens,
       };
       try {
-        const payload = messages.map((m) => ({
+        // Past replies go back without their thinking and step markers.
+        const payload = messages.filter((m) => m.role !== "assistant" || m.content.trim()).map((m) => ({
           role: m.role,
-          content: m.content,
+          content:
+            m.role === "assistant"
+              ? m.content.replace(/<think>[\s\S]*?(<\/think>|$)/g, "").replace(/<tool_ref id="[^"]+"\/>/g, "").trim()
+              : m.content,
         }));
         // The browser-agent harness runs the loop client-side (its tools act on
         // this app); everything else goes to the server harness via /api/chat.
@@ -285,8 +291,27 @@ export function useConversations(
             ).map((m) => ({ role: m.role, content: m.content })),
         };
         const isDsh = convo.harness === "deepseek" || convo.harness === "dsh";
+        const isOr = convo.model.startsWith(OR_PREFIX);
         const source =
-          convo.harness === BROWSER_AGENT_ID
+          isOr && convo.harness === "agent"
+            ? runAgent({
+                model: convo.model,
+                history: payload,
+                runId: `run_${Date.now()}`,
+                approval: settingsRef.current.approval ?? "auto",
+                temperature: params.temperature,
+                maxTokens: Math.max(params.max_tokens ?? 0, 8192), // whole files need room
+                signal: controller.signal,
+              })
+            : isOr
+              ? runChat({
+                  model: convo.model,
+                  history: payload,
+                  temperature: params.temperature,
+                  maxTokens: params.max_tokens,
+                  signal: controller.signal,
+                })
+              : convo.harness === BROWSER_AGENT_ID
             ? runBrowserAgent({
                 model: convo.model,
                 messages: payload,
@@ -316,36 +341,29 @@ export function useConversations(
                 );
         for await (const ev of source) {
           const chunk = ev.data || "";
+          const thinkOpen = acc.lastIndexOf("<think>") > acc.lastIndexOf("</think>");
           if (ev.type === "token") {
-            if (acc.includes("<think>") && !acc.includes("</think>")) {
-              acc += `</think>\n\n${chunk}`;
-            } else {
-              acc += chunk;
-            }
+            acc += thinkOpen ? `</think>\n\n${chunk}` : chunk;
             tokenCount += 1;
             setStreaming(acc);
           } else if (ev.type === "think") {
-            if (!acc.includes("<think>")) {
-              acc = `<think>${chunk}`;
-            } else {
-              acc += chunk;
-            }
+            acc += thinkOpen ? chunk : `${acc ? "\n\n" : ""}<think>${chunk}`;
             setStreaming(acc);
-          } else if (ev.type === "tool_call") {
+          } else if (ev.type === "tool_call" || ev.type === "tool_result") {
             if (chunk) {
               try {
                 const t = JSON.parse(chunk) as ToolEvent;
-                tools.push(t);
-                setLiveTools([...tools]);
-              } catch {}
-            }
-          } else if (ev.type === "tool_result") {
-            if (chunk) {
-              try {
-                const r = JSON.parse(chunk) as ToolEvent;
-                const existing = tools.find((t) => t.id === r.id);
-                if (existing) existing.result = r.result;
-                else tools.push(r);
+                const i = tools.findIndex((x) => x.id === t.id);
+                if (i >= 0) tools[i] = { ...tools[i], ...t };
+                else {
+                  tools.push(t);
+                  // Mark where it happened so the reply shows steps in order.
+                  if (t.status) {
+                    if (thinkOpen) acc += "</think>";
+                    acc += `\n<tool_ref id="${t.id}"/>\n`;
+                    setStreaming(acc);
+                  }
+                }
                 setLiveTools([...tools]);
               } catch {}
             }
@@ -355,27 +373,14 @@ export function useConversations(
           }
         }
       } catch (e) {
-        // Aborts surface as an error we swallow; offline network errors stream a friendly mock reply or run in Wasm Shell.
+        // Say what went wrong instead of inventing a reply.
         if ((e as Error).name !== "AbortError") {
-          const lastUser = messages.filter((m) => m.role === "user").pop()?.content || "";
-          let mockReply = "";
-          if (convo.harness === "terminal") {
-            // Execute via In-Browser WebAssembly Shell with live streaming
-            setStreaming("```\nprocessing…\n```");
-            const wasmRes = await wasmShell.execute(lastUser, (chunk) => {
-              setStreaming(`\`\`\`\n${chunk}\n\`\`\``);
-            });
-            if (wasmRes.output) {
-              mockReply = `\`\`\`\n${wasmRes.output}\n\`\`\`\n\`● exit ${wasmRes.exitCode}\``;
-            } else {
-              mockReply = `\`● exit ${wasmRes.exitCode}\``;
-            }
-          } else {
-            mockReply = `[Offline Mock via ${convo.model}] Backend server is currently disconnected. You said: "${lastUser}". Open ⚙ settings to start your Kaggle compute instance or connect a local server.`;
-          }
-          acc = mockReply;
-          setStreaming(acc);
-          tokenCount = convo.harness === "terminal" ? 0 : mockReply.split(/\s+/).length;
+          const msg = (e as Error).message || String(e);
+          setError(
+            /fetch|network|Failed to/i.test(msg) && !convo.model.startsWith(OR_PREFIX)
+              ? `Couldn't reach your EdgeRunner node (${getBackendBase() || "not set"}). Start it on your Mac, or pick an OpenRouter model to work in the browser.`
+              : msg,
+          );
         }
       } finally {
         abortRef.current = null;
@@ -396,7 +401,8 @@ export function useConversations(
               ? {
                   ...c,
                   cwd: convo.harness === "terminal" ? vfs.getCwd() : c.cwd,
-                  messages: [...messages, assistant],
+                  // A failed turn with nothing to show adds no empty reply.
+                  messages: acc.trim() || tools.length ? [...messages, assistant] : messages,
                   // Keep a custom/agent-set title; only auto-title the default.
                   title:
                     c.title && c.title !== "new session"

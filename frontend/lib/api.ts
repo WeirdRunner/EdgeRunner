@@ -85,6 +85,10 @@ export interface ToolEvent {
   arguments?: string;
   // present on tool_result
   result?: string;
+  // browser agent: lifecycle, unified diff of a file change, and the run it belongs to (for undo)
+  status?: "approval" | "running" | "done" | "failed" | "denied";
+  diff?: string;
+  run_id?: string;
 }
 
 export async function fetchCatalog(): Promise<Catalog> {

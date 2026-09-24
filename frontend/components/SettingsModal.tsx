@@ -6,6 +6,7 @@ import { type UseBackend } from "@/lib/useBackend";
 import { type Settings } from "@/lib/storage";
 import { githubSync } from "@/lib/githubSync";
 import { zipExporter } from "@/lib/zipExporter";
+import { OpenRouterKey } from "./OpenRouterPanel";
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -158,6 +159,23 @@ export function SettingsModal({
           {/* TAB 1: API KEYS */}
           {activeTab === "keys" && (
             <div className="space-y-5">
+              {/* OpenRouter + agent approvals */}
+              <div className="rounded-lg border border-term-border bg-term-panel/40 p-4 space-y-3">
+                <span className="font-bold text-xs text-term-fg">OPENROUTER (MODELS IN THE BROWSER)</span>
+                <OpenRouterKey />
+                <label className="flex flex-wrap items-center gap-2 text-[11px] text-term-dim">
+                  Coding agent asks before:
+                  <select
+                    value={settings.approval ?? "auto"}
+                    onChange={(e) => onSettingsChange({ approval: e.target.value as Settings["approval"] })}
+                    className="rounded border border-term-border bg-term-bg px-1.5 py-0.5 text-[11px] text-term-fg"
+                  >
+                    <option value="auto">nothing (it works in a sandbox; undo is per reply)</option>
+                    <option value="commands">running commands</option>
+                    <option value="all">file edits and commands</option>
+                  </select>
+                </label>
+              </div>
               {/* Kaggle Credentials */}
               <div className="rounded-lg border border-term-border bg-term-panel/40 p-4 space-y-3">
                 <div className="flex items-center justify-between">

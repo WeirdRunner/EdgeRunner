@@ -1,5 +1,6 @@
 "use client";
 
+import { OR_PREFIX } from "@/lib/agent/openrouter";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Composer } from "@/components/Composer";
@@ -172,6 +173,7 @@ export default function Home() {
     }) => {
       setCustomSelectedModel(selected);
       chat.setModel(selected.id);
+      if (selected.id.startsWith(OR_PREFIX)) return; // hosted: nothing to load
       kaggle.setLaunchModel(selected.id, selected.repo, selected.file);
       if (selected.gpu && kaggle.accelerator !== "gpu") {
         kaggle.setAccelerator("gpu");
@@ -605,7 +607,7 @@ export default function Home() {
   // Keep active conversation pointed at a known model
   useEffect(() => {
     const a = chat.active;
-    if (modelOptions.length === 0 || !a) return;
+    if (modelOptions.length === 0 || !a || a.model?.startsWith(OR_PREFIX)) return;
     const ids = modelOptions.map((m) => m.id);
     if (a.model && !ids.includes(a.model)) {
       if (customSelectedModel && customSelectedModel.id === a.model) return;
@@ -834,7 +836,15 @@ export default function Home() {
 
       {/* Compute Rig Power Status & Toggle Button (shifted to sandbox for chat/agent) */}
       {(harness === "chat" || harness === "agent") && (
-        backendOnline ? (
+        model.startsWith(OR_PREFIX) ? (
+          <span
+            className="flex items-center gap-1.5 rounded border border-term-border px-2 sm:px-2.5 py-0.5 text-xs text-term-dim font-semibold"
+            title="Runs in this browser via OpenRouter; no compute node needed"
+          >
+            <span className="h-1.5 w-1.5 rounded-full bg-term-green" />
+            <span>BROWSER</span>
+          </span>
+        ) : backendOnline ? (
           <button
             onClick={handleTogglePower}
             disabled={kaggle.busy}
@@ -1505,7 +1515,7 @@ export default function Home() {
                       />
                     )}
                     {chat.error && <p className="py-2 text-term-red text-xs">⚠ {chat.error}</p>}
-                    {catalogError &&
+                    {catalogError && !model.startsWith(OR_PREFIX) &&
                       (backendOnline ? (
                         <p className="py-2 text-term-red text-xs">⚠ {catalogError}</p>
                       ) : (

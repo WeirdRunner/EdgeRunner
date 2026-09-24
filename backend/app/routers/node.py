@@ -80,7 +80,9 @@ def _clip(s: str) -> str:
 
 
 def _argv(root: Path, command: str) -> list[str]:
-    shell = os.getenv("SHELL") or "/bin/zsh"
+    shell = os.getenv("SHELL") or ""
+    if not os.path.exists(shell):
+        shell = shutil.which("zsh") or shutil.which("bash") or "/bin/sh"
     argv = [shell, "-lc", command]
     if sandboxed():
         profile = Path(tempfile.gettempdir()) / "edgerunner-sandbox.sb"

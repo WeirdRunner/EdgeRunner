@@ -30,3 +30,6 @@ yarn-error.log*
 backend/workspace/
 workspace/
 frontend/public/kernel-bundle.json
+
+# local test/runtime state
+backend/tests/.edgerunner-test-home/

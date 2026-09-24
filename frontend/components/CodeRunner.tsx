@@ -1,32 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { broadcastTerminalEntry } from "@/lib/useTerminal";
-import { wasmShell } from "@/lib/wasmShell";
+import { edge } from "@/lib/edge/runtime";
 
-const RUNNABLE_LANGS = new Set([
-  "python",
-  "py",
-  "python3",
-  "bash",
-  "sh",
-  "shell",
-  "zsh",
-  "cmd",
-  "javascript",
-  "js",
-  "mjs",
-  "node",
-  "html",
-  "htm",
-  "c",
-  "cpp",
-  "go",
-  "rust",
-  "rs",
-]);
-
-import { getBackendBase } from "@/lib/api";
+// What a code block can run in the in-browser workspace (Node.js + a POSIX-like shell).
+const RUNNABLE_LANGS = new Set(["bash", "sh", "shell", "zsh", "javascript", "js", "mjs", "node", "typescript", "ts", "html", "htm"]);
 
 export function isRunnable(lang: string | null): boolean {
   if (!lang) return false;
@@ -64,68 +42,21 @@ export function CodeRunner({
     setExitCode(null);
     setDurationMs(null);
 
-    // Build command based on language
-    let cmd = rawCode;
-    if (l === "python" || l === "py" || l === "python3") {
-      const escaped = rawCode.replace(/'/g, "'\"'\"'");
-      cmd = `python3 -c '${escaped}'`;
-    } else if (l === "javascript" || l === "js" || l === "node" || l === "mjs") {
-      const escaped = rawCode.replace(/'/g, "'\"'\"'");
-      cmd = `node -e '${escaped}'`;
-    }
-
-    const startTime = performance.now();
+    const started = performance.now();
     try {
-      const base = getBackendBase();
-      const url = `${base}/api/terminal/exec`;
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ command: cmd }),
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        const elapsed = data.duration_ms || Math.round(performance.now() - startTime);
-        setOutput(data.output || "(no output)");
-        setExitCode(data.exit_code);
-        setDurationMs(elapsed);
-
-        // Broadcast to shared terminal console
-        broadcastTerminalEntry({
-          id: Math.random().toString(36).slice(2),
-          timestamp: new Date().toLocaleTimeString(),
-          type: "run",
-          command: cmd,
-          output: data.output,
-          exitCode: data.exit_code,
-          durationMs: elapsed,
-        });
-        setRunning(false);
-        return;
-      }
-    } catch {
-      // Backend offline -> Fallback to In-Browser WebAssembly Engine
-    }
-
-    try {
-      // In-Browser Wasm Fallback (Pyodide Python / JS sandbox / Wasm Shell)
-      const wasmRes = await wasmShell.execute(cmd);
-      const elapsed = wasmRes.durationMs || Math.round(performance.now() - startTime);
-      setOutput(wasmRes.output || "(no output)");
-      setExitCode(wasmRes.exitCode);
-      setDurationMs(elapsed);
-
-      broadcastTerminalEntry({
-        id: Math.random().toString(36).slice(2),
-        timestamp: new Date().toLocaleTimeString(),
-        type: "run",
-        command: cmd,
-        output: wasmRes.output,
-        exitCode: wasmRes.exitCode,
-        durationMs: elapsed,
-      });
+      const res =
+        l === "typescript" || l === "ts"
+          ? await edge.run("npx", ["-y", "tsx", "-e", rawCode], { timeoutMs: 120_000 })
+          : ["javascript", "js", "mjs", "node"].includes(l)
+            ? await edge.run("node", ["--input-type=module", "-e", rawCode], { timeoutMs: 60_000 })
+            : await edge.exec(rawCode, { timeoutMs: 120_000 });
+      setOutput(res.output || "(no output)");
+      setExitCode(res.code);
+    } catch (e) {
+      setOutput(`error: ${(e as Error).message}`);
+      setExitCode(1);
     } finally {
+      setDurationMs(Math.round(performance.now() - started));
       setRunning(false);
     }
   }

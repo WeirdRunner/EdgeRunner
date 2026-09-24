@@ -48,6 +48,12 @@ class EdgeRuntime {
   private booting: Promise<WebContainer> | null = null;
   private listeners = new Set<() => void>();
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
+  private fileListeners = new Set<() => void>();
+  /** Dev servers listening inside the workspace: port → preview URL. */
+  servers = new Map<number, string>();
+  private serverListeners = new Set<() => void>();
+  private background = new Map<string, WebContainerProcess>();
+  private filesTimer: ReturnType<typeof setTimeout> | null = null;
 
   /** Why the in-browser runtime can't run here (empty string when it can). */
   support(): string {
@@ -60,6 +66,12 @@ class EdgeRuntime {
   onChange(fn: () => void): () => void {
     this.listeners.add(fn);
     return () => this.listeners.delete(fn);
+  }
+
+  /** Called (debounced) whenever workspace files change — from the agent, the terminal or the editor. */
+  onFiles(fn: () => void): () => void {
+    this.fileListeners.add(fn);
+    return () => this.fileListeners.delete(fn);
   }
 
   private set(status: EdgeStatus, error = "") {
@@ -83,12 +95,18 @@ class EdgeRuntime {
     this.set("booting");
     this.booting = (async () => {
       const { WebContainer } = await import("@webcontainer/api");
-      const wc = await WebContainer.boot({ workdirName: "workspace" });
+      const wc = await WebContainer.boot({ workdirName: "workspace", coep: "credentialless" });   // must match the page (layout.tsx, next.config)
       const saved = await idb.get<FileSystemTree>(SNAPSHOT_KEY).catch(() => undefined);
       if (saved) await wc.mount(saved);
       wc.fs.watch(".", { recursive: true }, (_event, file) => {
         if (typeof file === "string" && /(^|\/)node_modules(\/|$)/.test(file)) return;
         this.scheduleSave();
+        if (this.filesTimer) clearTimeout(this.filesTimer);
+        this.filesTimer = setTimeout(() => this.fileListeners.forEach((f) => f()), 250);
+      });
+      wc.on("port", (port, type, url) => {
+        if (type === "open") this.servers.set(port, url); else this.servers.delete(port);
+        this.serverListeners.forEach((f) => f());
       });
       this.wc = wc;
       this.set("ready");
@@ -113,9 +131,60 @@ class EdgeRuntime {
     await idb.set(SNAPSHOT_KEY, tree);
   }
 
-  async exec(command: string, opts: { cwd?: string; timeoutMs?: number; onOutput?: (chunk: string) => void; signal?: AbortSignal } = {}): Promise<ExecResult> {
+  onServers(fn: () => void): () => void {
+    this.serverListeners.add(fn);
+    return () => this.serverListeners.delete(fn);
+  }
+
+  /** Start a long-running command (a dev server, a watcher) and leave it running. Returns its first output,
+   *  as soon as it opens a port or after `waitMs`. Starting the same command again replaces the old one. */
+  async start(command: string, opts: { cwd?: string; waitMs?: number } = {}): Promise<{ output: string; url?: string; exited?: number }> {
     const wc = await this.boot();
+    const key = `${opts.cwd || "."}::${command}`;
+    this.background.get(key)?.kill();
     const proc = await wc.spawn("jsh", ["-c", command], { cwd: opts.cwd ? norm(opts.cwd) : undefined, terminal: { cols: 120, rows: 40 } });
+    this.background.set(key, proc);
+    let out = "";
+    void proc.output.pipeTo(new WritableStream({ write(chunk) { if (out.length < MAX_OUTPUT) out += chunk; } })).catch(() => {});
+    const before = new Set(this.servers.keys());
+    const result = await new Promise<{ url?: string; exited?: number }>((resolve) => {
+      const timer = setTimeout(() => { off(); resolve({}); }, opts.waitMs ?? 20_000);
+      const off = this.onServers(() => {
+        const fresh = [...this.servers.entries()].find(([p]) => !before.has(p));
+        if (fresh) { clearTimeout(timer); off(); setTimeout(() => resolve({ url: fresh[1] }), 300); }
+      });
+      void proc.exit.then((code) => { clearTimeout(timer); off(); this.background.delete(key); resolve({ exited: code }); });
+    });
+    return { output: clip(stripAnsi(out)).trimEnd(), ...result };
+  }
+
+  stopAll(): number {
+    const n = this.background.size;
+    this.background.forEach((p) => p.kill());
+    this.background.clear();
+    return n;
+  }
+
+  /** Download the workspace (without node_modules) as a .zip file. */
+  async downloadZip(name = `workspace-${new Date().toISOString().slice(0, 10)}.zip`): Promise<void> {
+    const wc = await this.boot();
+    const data = await wc.export(".", { format: "zip", excludes: ["**/node_modules/**", "node_modules/**"] });
+    const url = URL.createObjectURL(new Blob([data], { type: "application/zip" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  async exec(command: string, opts: { cwd?: string; timeoutMs?: number; onOutput?: (chunk: string) => void; signal?: AbortSignal } = {}): Promise<ExecResult> {
+    return this.run("jsh", ["-c", command], opts);
+  }
+
+  /** Run a program with arguments directly (no shell quoting). */
+  async run(program: string, args: string[], opts: { cwd?: string; timeoutMs?: number; onOutput?: (chunk: string) => void; signal?: AbortSignal } = {}): Promise<ExecResult> {
+    const wc = await this.boot();
+    const proc = await wc.spawn(program, args, { cwd: opts.cwd ? norm(opts.cwd) : undefined, terminal: { cols: 120, rows: 40 } });
     let out = "";
     void proc.output.pipeTo(new WritableStream({ write(chunk) { out += chunk; opts.onOutput?.(chunk); } })).catch(() => {});
     let timedOut = false;
@@ -144,6 +213,29 @@ class EdgeRuntime {
     const dir = p.split("/").slice(0, -1).join("/");
     if (dir) await wc.fs.mkdir(dir, { recursive: true });
     await wc.fs.writeFile(p, content);
+  }
+
+  async readBytes(path: string): Promise<Uint8Array> {
+    const wc = await this.boot();
+    return wc.fs.readFile(norm(path));
+  }
+
+  async writeBytes(path: string, data: Uint8Array): Promise<void> {
+    const wc = await this.boot();
+    const p = norm(path);
+    const dir = p.split("/").slice(0, -1).join("/");
+    if (dir) await wc.fs.mkdir(dir, { recursive: true });
+    await wc.fs.writeFile(p, data);
+  }
+
+  async mkdir(path: string): Promise<void> {
+    const wc = await this.boot();
+    await wc.fs.mkdir(norm(path), { recursive: true });
+  }
+
+  async rename(from: string, to: string): Promise<void> {
+    const wc = await this.boot();
+    await wc.fs.rename(norm(from), norm(to));
   }
 
   async exists(path: string): Promise<boolean> {

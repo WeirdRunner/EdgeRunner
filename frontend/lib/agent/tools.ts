@@ -30,7 +30,8 @@ export const TOOL_SPECS = [
                     replace_all: { type: "boolean", description: "Replace every occurrence" } }, ["path", "old_string", "new_string"]) },
   { name: "run_command", kind: "command" as ToolKind,
     description: "Run a shell command in the workspace (Node.js 22, npm, npx and common shell commands; no Python, git binary, sudo or apt). Returns the output and exit code. Use for installs, builds, tests and running scripts.",
-    parameters: S({ command: str("The command line"), timeout_seconds: num("Stop after this many seconds. Default 120, max 600") }, ["command"]) },
+    parameters: S({ command: str("The command line"), timeout_seconds: num("Stop after this many seconds. Default 120, max 600"),
+                    background: { type: "boolean", description: "For commands that keep running (dev servers, watchers): start it, return its first output and preview URL, and leave it running. Running the same command again restarts it." } }, ["command"]) },
 ];
 
 export function toolKind(name: string): ToolKind | null {
@@ -124,6 +125,11 @@ export async function runTool(name: string, args: Record<string, any>, cp: Check
         return { ok: true, result: `Edited ${args.path}${count > 1 ? ` (${count} places)` : ""}.`, diff: patch(args.path, before, after) };
       }
       case "run_command": {
+        if (args.background) {
+          const r = await edge.start(args.command);
+          const state = r.exited != null ? `[exited with code ${r.exited}]` : r.url ? `[running; preview at ${r.url} — the user can open it in the Preview pane]` : "[still running]";
+          return { ok: r.exited == null || r.exited === 0, result: `${r.output || "(no output yet)"}\n${state}` };
+        }
         const t = Math.max(5, Math.min(600, args.timeout_seconds || 120));
         const r = await edge.exec(args.command, { timeoutMs: t * 1000, signal });
         return { ok: r.code === 0, result: `${r.output || "(no output)"}\n[exit code ${r.code}${r.timedOut ? `, stopped after ${t}s` : ""}]` };

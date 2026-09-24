@@ -2,13 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { getBackendBase, hasBackend, streamChat, type SamplingParams, type ToolEvent } from "./api";
-import { BROWSER_AGENT_ID, runBrowserAgent } from "./browserAgent";
+import { getBackendBase, streamChat, type SamplingParams, type ToolEvent } from "./api";
 import { runAgent, runChat } from "./agent/agent";
 import { OR_PREFIX } from "./agent/openrouter";
-import { runDeepSeekHarness } from "./deepseekHarness";
-import type { BrowserToolContext } from "./browserTools";
-import { vfs, wasmShell } from "./wasmShell";
+import { edge } from "./edge/runtime";
 import {
   Conversation,
   DisplayMessage,
@@ -88,9 +85,10 @@ export function useConversations(
   const activeIdRef = useRef<string | null>(null);
   activeIdRef.current = activeId;
 
-  // Hydrate from localStorage after mount (avoids SSR mismatch).
+  // Hydrate from IndexedDB after mount (avoids SSR mismatch).
   useEffect(() => {
-    const loaded = loadConversations();
+    void (async () => {
+    const loaded = await loadConversations();
     setConversations(loaded);
     const act = loadActiveId() ?? loaded[0]?.id ?? null;
     setActiveId(act);
@@ -104,13 +102,9 @@ export function useConversations(
     defaultsRef.current.harness = savedHarness;
     defaultsRef.current.model = savedModel;
 
-    if (activeConvo?.cwd) {
-      vfs.setCwd(activeConvo.cwd);
-    } else {
-      vfs.setCwd("/workspace");
-    }
-
     setHydrated(true);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Persist whenever conversations change (post-hydration).
@@ -153,7 +147,6 @@ export function useConversations(
       const existingEmpty = conversations.find((c) => c.messages.length === 0);
       if (existingEmpty) {
         setActiveId(existingEmpty.id);
-        vfs.setCwd(existingEmpty.cwd || "/workspace");
         setConversations((prev) =>
           prev.map((c) =>
             c.id === existingEmpty.id ? { ...c, harness: h, model: m } : c,
@@ -166,7 +159,6 @@ export function useConversations(
       }
 
       const convo = newConversation(m, h);
-      vfs.setCwd(convo.cwd || "/workspace");
       setConversations((prev) => [convo, ...prev]);
       setActiveId(convo.id);
       setStreaming("");
@@ -185,7 +177,6 @@ export function useConversations(
       selectedModel || defaultsRef.current.model,
       selectedHarness || defaultsRef.current.harness,
     );
-    vfs.setCwd(convo.cwd || "/workspace");
     setConversations([convo]);
     setActiveId(convo.id);
   }, [selectedHarness, selectedModel]);
@@ -194,15 +185,12 @@ export function useConversations(
     setActiveId(id);
     const convo = conversationsRef.current.find((c) => c.id === id);
     if (convo) {
-      vfs.setCwd(convo.cwd || "/workspace");
       setSelectedHarness(convo.harness);
       saveSelectedHarness(convo.harness);
       defaultsRef.current.harness = convo.harness;
       setSelectedModel(convo.model);
       saveSelectedModel(convo.model);
       defaultsRef.current.model = convo.model;
-    } else {
-      vfs.setCwd("/workspace");
     }
     setStreaming("");
     setLiveTools([]);
@@ -273,24 +261,8 @@ export function useConversations(
               ? m.content.replace(/<think>[\s\S]*?(<\/think>|$)/g, "").replace(/<tool_ref id="[^"]+"\/>/g, "").trim()
               : m.content,
         }));
-        // The browser-agent harness runs the loop client-side (its tools act on
-        // this app); everything else goes to the server harness via /api/chat.
-        const ctx: BrowserToolContext = {
-          listSessions: () =>
-            conversationsRef.current.map((c) => ({ id: c.id, title: c.title })),
-          renameActive: (title) =>
-            setConversations((prev) =>
-              prev.map((c) =>
-                c.id === activeIdRef.current ? { ...c, title } : c,
-              ),
-            ),
-          readActive: () =>
-            (
-              conversationsRef.current.find((c) => c.id === activeIdRef.current)
-                ?.messages ?? []
-            ).map((m) => ({ role: m.role, content: m.content })),
-        };
-        const isDsh = convo.harness === "deepseek" || convo.harness === "dsh";
+        // OpenRouter models run here in the browser (the agent's tools act on the in-browser workspace);
+        // other models go to your EdgeRunner node via /api/chat.
         const isOr = convo.model.startsWith(OR_PREFIX);
         const source =
           isOr && convo.harness === "agent"
@@ -309,25 +281,6 @@ export function useConversations(
                   history: payload,
                   temperature: params.temperature,
                   maxTokens: params.max_tokens,
-                  signal: controller.signal,
-                })
-              : convo.harness === BROWSER_AGENT_ID
-            ? runBrowserAgent({
-                model: convo.model,
-                messages: payload,
-                ctx,
-                temperature: params.temperature,
-                top_p: params.top_p,
-                max_tokens: params.max_tokens,
-                signal: controller.signal,
-              })
-            : isDsh && !hasBackend()
-              ? runDeepSeekHarness({
-                  messages: payload,
-                  preset: "code",
-                  temperature: params.temperature,
-                  top_p: params.top_p,
-                  max_tokens: params.max_tokens,
                   signal: controller.signal,
                 })
               : streamChat(
@@ -400,7 +353,7 @@ export function useConversations(
             c.id === convo.id
               ? {
                   ...c,
-                  cwd: convo.harness === "terminal" ? vfs.getCwd() : c.cwd,
+                  cwd: c.cwd,
                   // A failed turn with nothing to show adds no empty reply.
                   messages: acc.trim() || tools.length ? [...messages, assistant] : messages,
                   // Keep a custom/agent-set title; only auto-title the default.
@@ -566,11 +519,11 @@ export function useConversations(
         // Execute updated command
         const startTime = performance.now();
         try {
-          const res = await wasmShell.execute(newContent);
+          const res = await edge.exec(newContent);
           const durationMs = Math.round(performance.now() - startTime);
           const outputContent = res.output
-            ? `\`\`\`\n${res.output}\n\`\`\`\n\`● exit ${res.exitCode}\``
-            : `\`● exit ${res.exitCode}\``;
+            ? `\`\`\`\n${res.output}\n\`\`\`\n\`● exit ${res.code}\``
+            : `\`● exit ${res.code}\``;
           const finalMessages = [...updatedMessages];
           finalMessages[index + 1] = {
             role: "assistant",
@@ -617,7 +570,6 @@ export function useConversations(
     const userMessages = currentActive.messages.filter((m) => m.role === "user");
     const initialGoal = userMessages[0]?.content || "Software Engineering Task";
     const toolCount = currentActive.messages.reduce((sum, m) => sum + (m.tools?.length || 0), 0);
-    const vfsFiles = vfs.getAllEntries().map((e) => e.path).slice(0, 20);
 
     const summaryText = `### 📦 Session Context Compacted (${currentActive.messages.length} messages, ${toolCount} tool runs)
 
@@ -626,7 +578,6 @@ export function useConversations(
 
 **Current Architecture & Workspace State:**
 - **Working Directory:** \`${currentActive.cwd || "/workspace"}\`
-- **Active Files (${vfsFiles.length}):** ${vfsFiles.map((f) => `\`${f}\``).join(", ") || "None"}
 - **Verified Actions:** Completed ${toolCount} tool operations and environment checks.
 ${focus ? `\n**Focus Area:** ${focus}` : ""}
 

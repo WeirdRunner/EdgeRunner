@@ -18,6 +18,8 @@ How to work:
 - Look before you change: list_files and read_file the relevant code first.
 - Prefer edit_file for small changes; write_file for new files. Keep edits minimal and in the project's style.
 - After changes, verify: run the build, tests or the script with run_command. If something fails, read the error and fix it.
+- Dev servers and watchers never exit: run them with run_command background=true (e.g. npm run dev), never in the foreground.
+- Web apps: prefer Vite; it runs well here. Native modules and Python tools are not available.
 - Never invent command output or file contents. If you can't do something here, say so plainly.
 - When done, reply with a short summary: what changed (files), how you verified it, and anything left for the user.
 Keep replies concise; use Markdown.`;

@@ -16,7 +16,8 @@ const nextConfig = {
     ? {
         // Same isolation GitHub Pages gets from public/coi-serviceworker.js, sent directly in local dev.
         async headers() {
-          return [{ source: "/:path*", headers: [
+          // Everything except the preview-connect page (it must keep its opener, which COOP would cut).
+          return [{ source: "/((?!webcontainer/connect).*)", headers: [
             { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
             { key: "Cross-Origin-Embedder-Policy", value: "credentialless" },
           ] }];
@@ -25,6 +26,7 @@ const nextConfig = {
           const backendUrl =
             process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
           return [
+            { source: "/webcontainer/connect/:token", destination: "/webcontainer-connect.html" },
             {
               source: "/api/:path*",
               destination: `${backendUrl.replace(/\/$/, "")}/api/:path*`,

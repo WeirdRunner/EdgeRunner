@@ -1,4 +1,5 @@
-// localStorage-backed conversation store.
+import { idb } from "./edge/idb";
+// Client-side stores: conversations (IndexedDB), settings and selections (localStorage).
 //
 // The backend (on Kaggle, behind a tunnel) is ephemeral, so conversation
 // history lives client-side. All access is guarded for SSR — on the server
@@ -58,21 +59,31 @@ function hasStorage(): boolean {
   return typeof window !== "undefined" && !!window.localStorage;
 }
 
-export function loadConversations(): Conversation[] {
+// Conversations live in IndexedDB (tool output makes them too big for localStorage's ~5 MB).
+// Older versions kept them in localStorage; they are moved over on first load.
+export async function loadConversations(): Promise<Conversation[]> {
   if (!hasStorage()) return [];
   try {
+    const saved = await idb.get<Conversation[]>(KEY);
+    if (Array.isArray(saved)) return saved;
     const raw = window.localStorage.getItem(KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as Conversation[];
-    return Array.isArray(parsed) ? parsed : [];
+    const parsed = raw ? (JSON.parse(raw) as Conversation[]) : [];
+    if (Array.isArray(parsed) && parsed.length) {
+      await idb.set(KEY, parsed);
+      window.localStorage.removeItem(KEY);
+      return parsed;
+    }
   } catch {
-    return [];
+    /* fall through */
   }
+  return [];
 }
 
+let saveTimer: ReturnType<typeof setTimeout> | null = null;
 export function saveConversations(convos: Conversation[]): void {
   if (!hasStorage()) return;
-  window.localStorage.setItem(KEY, JSON.stringify(convos));
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => void idb.set(KEY, convos).catch((e) => console.warn("couldn't save conversations", e)), 400);
 }
 
 export function loadActiveId(): string | null {

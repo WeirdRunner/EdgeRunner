@@ -3,57 +3,19 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { listModels, OR_PREFIX, type OrModel } from "@/lib/agent/openrouter";
-import { getSecret, setSecret } from "@/lib/agent/secrets";
+import { SecretField } from "./SecretField";
 
 export function OpenRouterKey({ onChange }: { onChange?: (hasKey: boolean) => void }) {
-  const [saved, setSaved] = useState<boolean | null>(null);
-  const [value, setValue] = useState("");
-  const [editing, setEditing] = useState(false);
-
-  useEffect(() => {
-    getSecret("openrouter").then((k) => { setSaved(Boolean(k)); onChange?.(Boolean(k)); });
-  }, [onChange]);
-
-  const save = async (v: string | null) => {
-    await setSecret("openrouter", v);
-    setSaved(Boolean(v));
-    setValue("");
-    setEditing(false);
-    onChange?.(Boolean(v));
-  };
-
-  if (saved === null) return null;
-  if (saved && !editing) {
-    return (
-      <div className="flex items-center gap-2 text-[11px]">
-        <span className="text-term-green">● OpenRouter key saved (encrypted in this browser)</span>
-        <button className="text-term-dim underline hover:text-term-fg" onClick={() => setEditing(true)}>change</button>
-        <button className="text-term-dim underline hover:text-term-red" onClick={() => save(null)}>remove</button>
-      </div>
-    );
-  }
   return (
-    <form
-      className="space-y-1.5"
-      onSubmit={(e) => { e.preventDefault(); if (value.trim()) void save(value.trim()); }}
-    >
-      <div className="flex gap-2">
-        <input
-          type="password"
-          autoComplete="off"
-          placeholder="sk-or-v1-…"
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          className="min-w-0 flex-1 rounded border border-term-border bg-term-bg px-2 py-1 text-xs text-term-fg outline-none focus:border-term-green"
-        />
-        <button type="submit" className="rounded border border-term-green/50 px-2.5 py-1 text-xs text-term-green hover:bg-term-green/10">save</button>
-      </div>
-      <p className="text-[10px] text-term-dim">
-        Free key at{" "}
+    <SecretField
+      name="openrouter"
+      label="OpenRouter key"
+      placeholder="sk-or-v1-…"
+      onChange={onChange}
+      help={<>Free key at{" "}
         <a href="https://openrouter.ai/keys" target="_blank" rel="noreferrer" className="underline hover:text-term-fg">openrouter.ai/keys</a>
-        . It stays in this browser and is only sent to OpenRouter.
-      </p>
-    </form>
+        . It stays in this browser and is only sent to OpenRouter.</>}
+    />
   );
 }
 

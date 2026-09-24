@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { vfs } from "@/lib/wasmShell";
 
 interface ComposerProps {
   value: string;
@@ -94,32 +93,6 @@ export function Composer({
       return;
     }
 
-    // Tab key in terminal mode: autocompletion
-    if (e.key === "Tab" && isTerminal) {
-      e.preventDefault();
-      const ta = ref.current;
-      if (!ta) return;
-      const pos = ta.selectionStart;
-      const textBefore = value.slice(0, pos);
-      const tokens = textBefore.split(/\s+/);
-      const lastToken = tokens[tokens.length - 1] || "";
-      if (lastToken) {
-        const files = vfs.listFiles();
-        const matches = files.filter((f) => f.startsWith(lastToken));
-        if (matches.length === 1) {
-          const completion = matches[0].slice(lastToken.length);
-          const next = textBefore + completion + value.slice(pos);
-          onChange(next);
-          setTimeout(() => {
-            if (ref.current) {
-              ref.current.selectionStart = ref.current.selectionEnd = pos + completion.length;
-            }
-          }, 0);
-        }
-      }
-      return;
-    }
-
     // Up Arrow: cycle previous commands in history
     if (e.key === "ArrowUp") {
       const isSingleLine = !value.includes("\n");
@@ -166,12 +139,12 @@ export function Composer({
   }
 
   const defaultPlaceholder = isTerminal
-    ? "Type a shell command (e.g. ls -la, python3 script.py, pip install …) [↵ to run]"
+    ? "Type a shell command (e.g. ls, node app.js, npm install …) [↵ to run]"
     : isAgent
       ? "Instruct the coding agent to solve and verify tasks… (↵ to send)"
       : "Type a message… (↵ to send)";
 
-  const currentCwdDisplay = (cwd || vfs.getCwd() || "/workspace").replace(/^\/workspace/, "~/workspace");
+  const currentCwdDisplay = (cwd || "/workspace").replace(/^\/workspace/, "~/workspace");
 
   return (
     <div

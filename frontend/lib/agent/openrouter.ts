@@ -9,6 +9,9 @@ const API = "https://openrouter.ai/api/v1";
 const PREFERRED = ["poolside/laguna-s-2.1:free", "qwen/qwen3.8-27b:free", "nvidia/nemotron-3-super-120b-a12b:free",
   "google/gemma-4-31b-it:free", "cohere/north-mini-code:free"];
 
+/** Used before the live model list has loaded (and when nothing has been picked yet). */
+export const DEFAULT_OR_MODEL = OR_PREFIX + PREFERRED[0];
+
 export interface OrModel { id: string; name: string; context: number; tools: boolean; reasoning: boolean; free: boolean }
 export interface ToolCallDelta { id: string; name: string; arguments: string }
 export type OrChunk =

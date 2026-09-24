@@ -1,6 +1,6 @@
 "use client";
 
-import { OR_PREFIX } from "@/lib/agent/openrouter";
+import { DEFAULT_OR_MODEL, OR_PREFIX } from "@/lib/agent/openrouter";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Composer } from "@/components/Composer";
@@ -26,7 +26,7 @@ import { useBackend } from "@/lib/useBackend";
 import { useConversations } from "@/lib/useConversations";
 import { useKaggle } from "@/lib/useKaggle";
 import { useModelManager } from "@/lib/useModelManager";
-import { vfs } from "@/lib/wasmShell";
+import { edge } from "@/lib/edge/runtime";
 
 export default function Home() {
   const [catalog, setCatalog] = useState<Catalog | null>(null);
@@ -145,8 +145,9 @@ export default function Home() {
 
   const chat = useConversations(
     {
-      model: modelOptions[0]?.id ?? "Qwen3.5-4B-Q4_K_M",
-      harness: "chat",
+      // No EdgeRunner node configured → start on a free OpenRouter model, running in the browser.
+      model: hasBackend() ? modelOptions[0]?.id ?? "Qwen3.5-4B-Q4_K_M" : DEFAULT_OR_MODEL,
+      harness: hasBackend() ? "chat" : "agent",
     },
     settings,
   );
@@ -539,6 +540,18 @@ export default function Home() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [chat, showFilesModal, showModelModal, showPreviewModal, showSettings, showShortcutsModal, showTerminalDrawer, sidebarOpen, toggleSplitDock]);
+
+  // When a dev server starts in the workspace, offer to preview it.
+  const [serverNote, setServerNote] = useState<{ port: number; url: string } | null>(null);
+  useEffect(() => {
+    let known = new Set(edge.servers.keys());
+    return edge.onServers(() => {
+      const fresh = [...edge.servers.entries()].find(([p]) => !known.has(p));
+      known = new Set(edge.servers.keys());
+      if (fresh) setServerNote({ port: fresh[0], url: fresh[1] });
+      else setServerNote((n) => (n && edge.servers.has(n.port) ? n : null));
+    });
+  }, []);
 
   // Listen for Live Preview trigger from messages or terminal
   useEffect(() => {
@@ -1104,7 +1117,7 @@ export default function Home() {
                     </div>
                   </div>
                   <span className="text-xs text-term-dim group-hover:text-term-fg">
-                    Neural Assistant & Inference
+                    Chat with any model
                   </span>
                 </button>
 
@@ -1125,7 +1138,7 @@ export default function Home() {
                     </div>
                   </div>
                   <span className="text-xs text-term-dim group-hover:text-term-fg">
-                    DeepSeek Harness (dsh) & Dual-Phase Reasoning
+                    Coding agent · works on your workspace
                   </span>
                 </button>
 
@@ -1146,7 +1159,7 @@ export default function Home() {
                     </div>
                   </div>
                   <span className="text-xs text-term-dim group-hover:text-term-fg">
-                    Interactive Wasm PTY & Shell
+                    Real shell · Node.js & npm in the browser
                   </span>
                 </button>
 
@@ -1167,7 +1180,7 @@ export default function Home() {
                     </div>
                   </div>
                   <span className="text-xs text-term-dim group-hover:text-term-fg">
-                    VS Code Monaco & Git DAG
+                    Files, editor & GitHub
                   </span>
                 </button>
               </div>
@@ -1180,7 +1193,7 @@ export default function Home() {
                   onSubmit={submit}
                   placeholder={
                     harness === "terminal"
-                      ? "Type a shell command (e.g. ls -la, python3 script.py, pip install …) [↵ to run]"
+                      ? "Type a shell command (e.g. ls, node app.js, npm install …) [↵ to run]"
                       : "Type a prompt to launch session… (↵ to send)"
                   }
                   disabled={chat.busy || modelManager.isSwitching}
@@ -1486,7 +1499,7 @@ export default function Home() {
                         <Logo variant="hero" className="mb-4 max-w-[340px]" />
                         <div className="max-w-md space-y-2">
                           <p className="text-xs text-term-dim">
-                            Ready for inference on your compute node.
+                            Ask a question, or give the agent a task in your workspace.
                           </p>
                         </div>
                       </div>
@@ -1571,7 +1584,7 @@ export default function Home() {
                   disabled={chat.busy || modelManager.isSwitching}
                   bottomRight={sandboxPickers}
                   harness={harness}
-                  cwd={active?.cwd || vfs.getCwd()}
+                  cwd={active?.cwd}
                 />
               </div>
             )}
@@ -1610,6 +1623,20 @@ export default function Home() {
         isOpen={showFilesModal}
         onClose={() => setShowFilesModal(false)}
       />
+
+      {serverNote && !showPreviewModal && (
+        <div className="fixed bottom-4 right-4 z-40 flex items-center gap-2 rounded border border-term-green/50 bg-term-panel px-3 py-2 font-mono text-xs shadow-lg">
+          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-term-green" />
+          <span className="text-term-fg">Server running on :{serverNote.port}</span>
+          <button
+            className="rounded border border-term-green/60 px-2 py-0.5 text-term-green hover:bg-term-green/10"
+            onClick={() => { setPreviewUrl(serverNote.url); setShowPreviewModal(true); setServerNote(null); }}
+          >
+            open preview
+          </button>
+          <button className="text-term-dim hover:text-term-fg" onClick={() => setServerNote(null)} title="Dismiss">✕</button>
+        </div>
+      )}
 
       <LivePreviewModal
         isOpen={showPreviewModal}

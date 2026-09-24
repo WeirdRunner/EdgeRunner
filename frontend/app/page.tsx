@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Composer } from "@/components/Composer";
 import { FileExplorerModal } from "@/components/FileExplorerModal";
+import { EdgeTerminal } from "@/components/EdgeTerminal";
 import { LivePreviewModal } from "@/components/LivePreviewModal";
 import { Logo } from "@/components/Logo";
 import { Message } from "@/components/Message";
@@ -1399,6 +1400,10 @@ export default function Home() {
                           <div className="flex-1 overflow-hidden p-0 h-full">
                             <FileExplorerModal isOpen={true} inline={true} />
                           </div>
+                        ) : paneMode === "terminal" ? (
+                          <div className="flex-1 overflow-hidden h-full">
+                            <EdgeTerminal />
+                          </div>
                         ) : (
                           <div
                             ref={isActive ? scrollRef : undefined}
@@ -1447,8 +1452,12 @@ export default function Home() {
                   })}
                 </div>
               ) : (
-                /* Single Active Session: Fullscreen Workspace OR Chat Transcript */
-                harness === "workspace" ? (
+                /* Single Active Session: Fullscreen Workspace, a real Terminal, OR Chat Transcript */
+                harness === "terminal" ? (
+                  <div className="h-full w-full overflow-hidden">
+                    <EdgeTerminal />
+                  </div>
+                ) : harness === "workspace" ? (
                   <div className="h-full w-full overflow-hidden flex flex-col">
                     <FileExplorerModal
                       isOpen={true}
@@ -1508,7 +1517,7 @@ export default function Home() {
                 )
               )}
 
-              {!atBottom && harness !== "workspace" && (
+              {!atBottom && harness !== "workspace" && harness !== "terminal" && (
                 <button
                   onClick={scrollToBottom}
                   className="absolute bottom-3 right-3 flex items-center gap-1 rounded border border-term-border
@@ -1521,8 +1530,8 @@ export default function Home() {
               )}
             </div>
 
-            {/* Composer & Bottom Sandbox Controls (hidden when in fullscreen workspace mode) */}
-            {harness !== "workspace" && (
+            {/* Composer & Bottom Sandbox Controls (the terminal and workspace take input directly) */}
+            {harness !== "workspace" && harness !== "terminal" && (
               <div className="pt-2 pb-2">
                 {modelManager.isSwitching && (
                   <div className="mb-2 flex items-center justify-between rounded border border-term-amber/40 bg-term-amber/10 px-3 py-1.5 text-xs text-term-amber">
@@ -1571,6 +1580,16 @@ export default function Home() {
         kaggle={kaggle}
         backend={backend}
       />
+
+      {showTerminalDrawer && (
+        <div className="fixed inset-x-0 bottom-0 z-40 flex h-[45vh] flex-col border-t border-term-border bg-term-bg shadow-2xl">
+          <div className="flex items-center justify-between border-b border-term-border/70 px-3 py-1 text-[11px] text-term-dim">
+            <span>terminal · in-browser workspace</span>
+            <button onClick={() => setShowTerminalDrawer(false)} className="hover:text-term-green" aria-label="Close terminal">✕ esc</button>
+          </div>
+          <div className="min-h-0 flex-1"><EdgeTerminal /></div>
+        </div>
+      )}
 
       <ShortcutsModal
         isOpen={showShortcutsModal}

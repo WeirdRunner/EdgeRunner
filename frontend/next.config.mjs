@@ -14,6 +14,13 @@ const nextConfig = {
   env: { NEXT_PUBLIC_BASE_PATH: basePath },
   ...(!isPages
     ? {
+        // Same isolation GitHub Pages gets from public/coi-serviceworker.js, sent directly in local dev.
+        async headers() {
+          return [{ source: "/:path*", headers: [
+            { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
+            { key: "Cross-Origin-Embedder-Policy", value: "credentialless" },
+          ] }];
+        },
         async rewrites() {
           const backendUrl =
             process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";

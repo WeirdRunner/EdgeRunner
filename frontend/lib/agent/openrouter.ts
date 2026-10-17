@@ -75,7 +75,7 @@ export async function* streamCompletion(opts: {
   const r = await fetch(`${API}/chat/completions`, {
     method: "POST", signal: opts.signal, body: JSON.stringify(body),
     headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json",
-               "HTTP-Referer": "https://github.com/deveshpat/EdgeRunner", "X-Title": "EdgeRunner" },
+               "HTTP-Referer": "https://github.com/WeirdRunner/EdgeRunner", "X-Title": "EdgeRunner" },
   });
   if (!r.ok || !r.body) throw new ProviderError(explain(r.status, await r.text()), r.status);
 

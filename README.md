@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <a href="https://deveshpat.github.io/EdgeRunner/">Open EdgeRunner</a> ·
+  <a href="https://weirdrunner.github.io/EdgeRunner/">Open EdgeRunner</a> ·
   <a href="#run-it-on-your-mac">Mac node</a> ·
   <a href="#how-it-works">How it works</a>
 </p>
@@ -29,7 +29,7 @@
 
 ## Quick start
 
-1. Open **https://deveshpat.github.io/EdgeRunner/** in Chrome, Edge, Brave or Arc on a computer.
+1. Open **https://weirdrunner.github.io/EdgeRunner/** in Chrome, Edge, Brave or Arc on a computer.
 2. Get a free key at [openrouter.ai/keys](https://openrouter.ai/keys) and paste it in **⚙ Settings** (or the model picker).
 3. Choose **/agent** and describe a task, e.g. *"create a Vite + React todo app and start it"*.
 

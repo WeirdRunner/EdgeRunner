@@ -17,7 +17,7 @@ from app.core import store
 
 OPEN_PATHS = {"/api/health"}
 DEFAULT_ORIGINS = ["http://localhost:3000", "http://localhost:3100", "http://127.0.0.1:3000", "http://127.0.0.1:3100",
-                   "https://deveshpat.github.io"]
+                   "https://weirdrunner.github.io"]
 
 
 def allowed_origins() -> list[str]:
@@ -45,7 +45,7 @@ class TokenAuth(BaseHTTPMiddleware):
 
 
 class PrivateNetworkAccess:
-    """Lets the hosted app (https://deveshpat.github.io) reach this server on localhost: Chrome first asks the
+    """Lets the hosted app (https://weirdrunner.github.io) reach this server on localhost: Chrome first asks the
     server, in the CORS preflight, whether public pages may call it. Origins are still limited by CORS above."""
 
     def __init__(self, app):

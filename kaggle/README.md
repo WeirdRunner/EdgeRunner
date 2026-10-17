@@ -31,7 +31,7 @@ session) takes the backend offline; just re-run it to get a fresh URL.
 ## Notes
 
 - **Fast install:** dependencies (including the compiled `llama-cpp-python`)
-  come from this repo's [`wheels-v1` release](https://github.com/deveshpat/EdgeRunner/releases/tag/wheels-v1)
+  come from this repo's [`wheels-v1` release](https://github.com/WeirdRunner/EdgeRunner/releases/tag/wheels-v1)
   as a prebuilt wheelhouse — no PyPI sdist compile, no flaky wheel index. The
   script auto-picks the tarball matching Kaggle's Python version (and GPU vs
   CPU); if none matches it falls back to PyPI.

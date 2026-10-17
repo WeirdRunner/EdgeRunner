@@ -68,7 +68,7 @@ def pip(*args):
 # llama-cpp-python sdist (compiles for minutes) or the flaky abetlen index. Each
 # edgerunner-wheels-<pyver>-<accel>.tar.gz is a flat wheelhouse with the whole
 # closure except two tiny pure-python server deps that pip fills from PyPI.
-WHEELS_RELEASE = "https://github.com/deveshpat/EdgeRunner/releases/download/wheels-v1"
+WHEELS_RELEASE = "https://github.com/WeirdRunner/EdgeRunner/releases/download/wheels-v1"
 WHEELHOUSE = ROOT / "wheels"
 _PKGS = ["llama-cpp-python[server]", "fastapi", "uvicorn[standard]",
          "httpx", "pydantic", "huggingface_hub"]

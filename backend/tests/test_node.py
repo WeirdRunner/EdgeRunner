@@ -124,10 +124,10 @@ def test_background_server_reports_url(project):
 
 def test_private_network_preflight_allows_hosted_app():
     r = client.options("/api/node/info", headers={
-        "Origin": "https://deveshpat.github.io", "Access-Control-Request-Method": "GET",
+        "Origin": "https://weirdrunner.github.io", "Access-Control-Request-Method": "GET",
         "Access-Control-Request-Private-Network": "true", "Access-Control-Request-Headers": "authorization"})
     assert r.headers.get("access-control-allow-private-network") == "true"
-    assert r.headers.get("access-control-allow-origin") == "https://deveshpat.github.io"
+    assert r.headers.get("access-control-allow-origin") == "https://weirdrunner.github.io"
 
 
 def test_private_network_preflight_rejects_other_sites():

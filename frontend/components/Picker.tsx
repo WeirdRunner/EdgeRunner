@@ -29,7 +29,9 @@ export function Picker({
 }: PickerProps) {
   const currentOption = options.find((o) => o.id === value) ?? {
     id: value,
-    name: value || "select…",
+    // "openrouter/qwen/qwen3.8-27b:free" → "qwen3.8-27b:free"
+    name: (value.startsWith("openrouter/") ? value.split("/").pop() : value) || "select…",
+    description: value,
   };
 
   const isModelPicker = label.toLowerCase().includes("payload");

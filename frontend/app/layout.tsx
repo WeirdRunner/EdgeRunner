@@ -21,6 +21,10 @@ export default function RootLayout({
   return (
     <html lang="en" className={jetbrainsMono.variable}>
       <head>
+        {/* Cross-origin isolation for the in-browser workspace (WebContainers) on hosts that can't set headers,
+            e.g. GitHub Pages. No-op when the server already sends COOP/COEP (next dev does, see next.config). */}
+        <script dangerouslySetInnerHTML={{ __html: "window.coi = { coepCredentialless: function () { return true; }, quiet: true };" }} />
+        <script src={`${process.env.NEXT_PUBLIC_BASE_PATH || ""}/coi-serviceworker.js`} />
         <script
           dangerouslySetInnerHTML={{
             __html: `

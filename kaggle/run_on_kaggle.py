@@ -20,7 +20,7 @@ connects and the Echo (mock) harness works; llama.cpp chat needs a model.
 import os, re, subprocess, sys, tarfile, time, urllib.request
 
 # --- config ---------------------------------------------------------------
-REPO = "https://github.com/deveshpat/EdgeRunner"
+REPO = "https://github.com/WeirdRunner/EdgeRunner"
 MODEL_REPO = "Qwen/Qwen2.5-1.5B-Instruct-GGUF"
 MODEL_FILE = "qwen2.5-1.5b-instruct-q4_k_m.gguf"  # set to None to skip the model
 GPU = False  # set True on a GPU T4 session
@@ -38,7 +38,7 @@ HF_TOKEN = os.environ.get("HF_TOKEN", "")
 # the whole closure (llama-cpp-python, numpy, fastapi, uvicorn, huggingface_hub…)
 # except two tiny pure-python server deps (sse-starlette, starlette-context)
 # that pip fills from PyPI.
-WHEELS_RELEASE = "https://github.com/deveshpat/EdgeRunner/releases/download/wheels-v1"
+WHEELS_RELEASE = "https://github.com/WeirdRunner/EdgeRunner/releases/download/wheels-v1"
 WHEELHOUSE = "/kaggle/working/wheels"
 LLAMA_VERSION = "0.3.33"
 

@@ -1,9 +1,11 @@
 "use client";
 
+import { DEFAULT_OR_MODEL, OR_PREFIX } from "@/lib/agent/openrouter";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Composer } from "@/components/Composer";
 import { FileExplorerModal } from "@/components/FileExplorerModal";
+import { EdgeTerminal } from "@/components/EdgeTerminal";
 import { LivePreviewModal } from "@/components/LivePreviewModal";
 import { Logo } from "@/components/Logo";
 import { Message } from "@/components/Message";
@@ -24,7 +26,8 @@ import { useBackend } from "@/lib/useBackend";
 import { useConversations } from "@/lib/useConversations";
 import { useKaggle } from "@/lib/useKaggle";
 import { useModelManager } from "@/lib/useModelManager";
-import { vfs } from "@/lib/wasmShell";
+import { edge } from "@/lib/edge/runtime";
+import { TargetPicker } from "@/components/TargetPicker";
 
 export default function Home() {
   const [catalog, setCatalog] = useState<Catalog | null>(null);
@@ -143,8 +146,9 @@ export default function Home() {
 
   const chat = useConversations(
     {
-      model: modelOptions[0]?.id ?? "Qwen3.5-4B-Q4_K_M",
-      harness: "chat",
+      // No EdgeRunner node configured → start on a free OpenRouter model, running in the browser.
+      model: hasBackend() ? modelOptions[0]?.id ?? "Qwen3.5-4B-Q4_K_M" : DEFAULT_OR_MODEL,
+      harness: hasBackend() ? "chat" : "agent",
     },
     settings,
   );
@@ -171,6 +175,7 @@ export default function Home() {
     }) => {
       setCustomSelectedModel(selected);
       chat.setModel(selected.id);
+      if (selected.id.startsWith(OR_PREFIX)) return; // hosted: nothing to load
       kaggle.setLaunchModel(selected.id, selected.repo, selected.file);
       if (selected.gpu && kaggle.accelerator !== "gpu") {
         kaggle.setAccelerator("gpu");
@@ -537,6 +542,18 @@ export default function Home() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [chat, showFilesModal, showModelModal, showPreviewModal, showSettings, showShortcutsModal, showTerminalDrawer, sidebarOpen, toggleSplitDock]);
 
+  // When a dev server starts in the workspace, offer to preview it.
+  const [serverNote, setServerNote] = useState<{ port: number; url: string } | null>(null);
+  useEffect(() => {
+    let known = new Set(edge.servers.keys());
+    return edge.onServers(() => {
+      const fresh = [...edge.servers.entries()].find(([p]) => !known.has(p));
+      known = new Set(edge.servers.keys());
+      if (fresh) setServerNote({ port: fresh[0], url: fresh[1] });
+      else setServerNote((n) => (n && edge.servers.has(n.port) ? n : null));
+    });
+  }, []);
+
   // Listen for Live Preview trigger from messages or terminal
   useEffect(() => {
     function handleOpenPreview(e: any) {
@@ -604,7 +621,7 @@ export default function Home() {
   // Keep active conversation pointed at a known model
   useEffect(() => {
     const a = chat.active;
-    if (modelOptions.length === 0 || !a) return;
+    if (modelOptions.length === 0 || !a || a.model?.startsWith(OR_PREFIX)) return;
     const ids = modelOptions.map((m) => m.id);
     if (a.model && !ids.includes(a.model)) {
       if (customSelectedModel && customSelectedModel.id === a.model) return;
@@ -833,7 +850,17 @@ export default function Home() {
 
       {/* Compute Rig Power Status & Toggle Button (shifted to sandbox for chat/agent) */}
       {(harness === "chat" || harness === "agent") && (
-        backendOnline ? (
+        model.startsWith(OR_PREFIX) && harness === "agent" ? (
+          <TargetPicker value={chat.target} onChange={chat.setTarget} onConnect={() => setShowSettings(true)} />
+        ) : model.startsWith(OR_PREFIX) ? (
+          <span
+            className="flex items-center gap-1.5 rounded border border-term-border px-2 sm:px-2.5 py-0.5 text-xs text-term-dim font-semibold"
+            title="Runs in this browser via OpenRouter; no compute node needed"
+          >
+            <span className="h-1.5 w-1.5 rounded-full bg-term-green" />
+            <span>BROWSER</span>
+          </span>
+        ) : backendOnline ? (
           <button
             onClick={handleTogglePower}
             disabled={kaggle.busy}
@@ -1093,7 +1120,7 @@ export default function Home() {
                     </div>
                   </div>
                   <span className="text-xs text-term-dim group-hover:text-term-fg">
-                    Neural Assistant & Inference
+                    Chat with any model
                   </span>
                 </button>
 
@@ -1114,7 +1141,7 @@ export default function Home() {
                     </div>
                   </div>
                   <span className="text-xs text-term-dim group-hover:text-term-fg">
-                    DeepSeek Harness (dsh) & Dual-Phase Reasoning
+                    Coding agent · works on your workspace
                   </span>
                 </button>
 
@@ -1135,7 +1162,7 @@ export default function Home() {
                     </div>
                   </div>
                   <span className="text-xs text-term-dim group-hover:text-term-fg">
-                    Interactive Wasm PTY & Shell
+                    Real shell · Node.js & npm in the browser
                   </span>
                 </button>
 
@@ -1156,7 +1183,7 @@ export default function Home() {
                     </div>
                   </div>
                   <span className="text-xs text-term-dim group-hover:text-term-fg">
-                    VS Code Monaco & Git DAG
+                    Files, editor & GitHub
                   </span>
                 </button>
               </div>
@@ -1169,7 +1196,7 @@ export default function Home() {
                   onSubmit={submit}
                   placeholder={
                     harness === "terminal"
-                      ? "Type a shell command (e.g. ls -la, python3 script.py, pip install …) [↵ to run]"
+                      ? "Type a shell command (e.g. ls, node app.js, npm install …) [↵ to run]"
                       : "Type a prompt to launch session… (↵ to send)"
                   }
                   disabled={chat.busy || modelManager.isSwitching}
@@ -1399,6 +1426,10 @@ export default function Home() {
                           <div className="flex-1 overflow-hidden p-0 h-full">
                             <FileExplorerModal isOpen={true} inline={true} />
                           </div>
+                        ) : paneMode === "terminal" ? (
+                          <div className="flex-1 overflow-hidden h-full">
+                            <EdgeTerminal />
+                          </div>
                         ) : (
                           <div
                             ref={isActive ? scrollRef : undefined}
@@ -1447,8 +1478,12 @@ export default function Home() {
                   })}
                 </div>
               ) : (
-                /* Single Active Session: Fullscreen Workspace OR Chat Transcript */
-                harness === "workspace" ? (
+                /* Single Active Session: Fullscreen Workspace, a real Terminal, OR Chat Transcript */
+                harness === "terminal" ? (
+                  <div className="h-full w-full overflow-hidden">
+                    <EdgeTerminal />
+                  </div>
+                ) : harness === "workspace" ? (
                   <div className="h-full w-full overflow-hidden flex flex-col">
                     <FileExplorerModal
                       isOpen={true}
@@ -1467,7 +1502,7 @@ export default function Home() {
                         <Logo variant="hero" className="mb-4 max-w-[340px]" />
                         <div className="max-w-md space-y-2">
                           <p className="text-xs text-term-dim">
-                            Ready for inference on your compute node.
+                            Ask a question, or give the agent a task in your workspace.
                           </p>
                         </div>
                       </div>
@@ -1496,7 +1531,7 @@ export default function Home() {
                       />
                     )}
                     {chat.error && <p className="py-2 text-term-red text-xs">⚠ {chat.error}</p>}
-                    {catalogError &&
+                    {catalogError && !model.startsWith(OR_PREFIX) &&
                       (backendOnline ? (
                         <p className="py-2 text-term-red text-xs">⚠ {catalogError}</p>
                       ) : (
@@ -1508,7 +1543,7 @@ export default function Home() {
                 )
               )}
 
-              {!atBottom && harness !== "workspace" && (
+              {!atBottom && harness !== "workspace" && harness !== "terminal" && (
                 <button
                   onClick={scrollToBottom}
                   className="absolute bottom-3 right-3 flex items-center gap-1 rounded border border-term-border
@@ -1521,8 +1556,8 @@ export default function Home() {
               )}
             </div>
 
-            {/* Composer & Bottom Sandbox Controls (hidden when in fullscreen workspace mode) */}
-            {harness !== "workspace" && (
+            {/* Composer & Bottom Sandbox Controls (the terminal and workspace take input directly) */}
+            {harness !== "workspace" && harness !== "terminal" && (
               <div className="pt-2 pb-2">
                 {modelManager.isSwitching && (
                   <div className="mb-2 flex items-center justify-between rounded border border-term-amber/40 bg-term-amber/10 px-3 py-1.5 text-xs text-term-amber">
@@ -1552,7 +1587,7 @@ export default function Home() {
                   disabled={chat.busy || modelManager.isSwitching}
                   bottomRight={sandboxPickers}
                   harness={harness}
-                  cwd={active?.cwd || vfs.getCwd()}
+                  cwd={active?.cwd}
                 />
               </div>
             )}
@@ -1572,6 +1607,16 @@ export default function Home() {
         backend={backend}
       />
 
+      {showTerminalDrawer && (
+        <div className="fixed inset-x-0 bottom-0 z-40 flex h-[45vh] flex-col border-t border-term-border bg-term-bg shadow-2xl">
+          <div className="flex items-center justify-between border-b border-term-border/70 px-3 py-1 text-[11px] text-term-dim">
+            <span>terminal · in-browser workspace</span>
+            <button onClick={() => setShowTerminalDrawer(false)} className="hover:text-term-green" aria-label="Close terminal">✕ esc</button>
+          </div>
+          <div className="min-h-0 flex-1"><EdgeTerminal /></div>
+        </div>
+      )}
+
       <ShortcutsModal
         isOpen={showShortcutsModal}
         onClose={() => setShowShortcutsModal(false)}
@@ -1581,6 +1626,20 @@ export default function Home() {
         isOpen={showFilesModal}
         onClose={() => setShowFilesModal(false)}
       />
+
+      {serverNote && !showPreviewModal && (
+        <div className="fixed bottom-4 right-4 z-40 flex items-center gap-2 rounded border border-term-green/50 bg-term-panel px-3 py-2 font-mono text-xs shadow-lg">
+          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-term-green" />
+          <span className="text-term-fg">Server running on :{serverNote.port}</span>
+          <button
+            className="rounded border border-term-green/60 px-2 py-0.5 text-term-green hover:bg-term-green/10"
+            onClick={() => { setPreviewUrl(serverNote.url); setShowPreviewModal(true); setServerNote(null); }}
+          >
+            open preview
+          </button>
+          <button className="text-term-dim hover:text-term-fg" onClick={() => setServerNote(null)} title="Dismiss">✕</button>
+        </div>
+      )}
 
       <LivePreviewModal
         isOpen={showPreviewModal}

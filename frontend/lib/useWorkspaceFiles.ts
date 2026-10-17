@@ -1,8 +1,9 @@
 "use client";
+// The file tree of the in-browser workspace (lib/edge/runtime.ts). Refreshes itself when anything
+// changes files — the agent, the terminal or the editor.
 
 import { useCallback, useEffect, useState } from "react";
-import { getBackendBase } from "@/lib/api";
-import { vfs } from "@/lib/wasmShell";
+import { edge } from "@/lib/edge/runtime";
 
 export interface FileItem {
   name: string;
@@ -25,190 +26,67 @@ export interface UseWorkspaceFiles {
   deleteItem: (path: string) => Promise<boolean>;
 }
 
-function buildVfsTree(): FileItem[] {
-  const entries = vfs.getAllEntries();
-  const rootItems: FileItem[] = [];
-  const dirMap = new Map<string, FileItem>();
+const HIDDEN = new Set(["node_modules", ".git"]);   // shown, but not expanded (can be huge)
 
-  for (const entry of entries) {
-    const parts = entry.path.split("/").filter(Boolean);
-    let currentPath = "";
-    let parentChildren = rootItems;
-
-    for (let i = 0; i < parts.length; i++) {
-      const part = parts[i];
-      const isFile = i === parts.length - 1;
-      currentPath = currentPath ? `${currentPath}/${part}` : part;
-
-      if (isFile) {
-        parentChildren.push({
-          name: part,
-          path: entry.path,
-          type: "file",
-          size: entry.content.length,
-          mtime: entry.mtime,
-        });
-      } else {
-        let dirItem = dirMap.get(currentPath);
-        if (!dirItem) {
-          dirItem = {
-            name: part,
-            path: currentPath,
-            type: "directory",
-            children: [],
-          };
-          dirMap.set(currentPath, dirItem);
-          parentChildren.push(dirItem);
-        }
-        parentChildren = dirItem.children!;
-      }
+async function tree(path: string, budget = { left: 3000 }): Promise<FileItem[]> {
+  const out: FileItem[] = [];
+  for (const e of await edge.list(path)) {
+    if (budget.left-- <= 0) break;
+    if (e.dir) {
+      out.push({ name: e.name, path: e.path, type: "directory", children: HIDDEN.has(e.name) ? [] : await tree(e.path, budget) });
+    } else {
+      out.push({ name: e.name, path: e.path, type: "file" });
     }
   }
-
-  return rootItems;
+  return out;
 }
 
 export function useWorkspaceFiles(): UseWorkspaceFiles {
   const [items, setItems] = useState<FileItem[]>([]);
-  const [root, setRoot] = useState<string>("");
-  const [loading, setLoading] = useState<boolean>(false);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
-    setError(null);
     try {
-      const base = getBackendBase();
-      const url = `${base}/api/files/tree`;
-      const res = await fetch(url);
-      if (res.ok) {
-        const data = (await res.json()) as { root: string; items: FileItem[] };
-        setRoot(data.root);
-        setItems(data.items || []);
-        return;
-      }
-    } catch {
-      // Backend offline -> Fallback to client-side Virtual Filesystem (VFS)
+      setItems(await tree("."));
+      setError(null);
+    } catch (e) {
+      setError(edge.support() || (e as Error).message);
     } finally {
       setLoading(false);
     }
-
-    // Load from local VFS
-    setRoot("/workspace");
-    setItems(buildVfsTree());
   }, []);
 
   useEffect(() => {
-    refresh();
+    void refresh();
+    return edge.onFiles(() => void refresh());
   }, [refresh]);
 
-  const readFile = useCallback(
-    async (path: string): Promise<{ content: string; size: number; name: string }> => {
-      try {
-        const base = getBackendBase();
-        const url = `${base}/api/files/read?path=${encodeURIComponent(path)}`;
-        const res = await fetch(url);
-        if (res.ok) {
-          const data = await res.json();
-          return { content: data.content, size: data.size, name: data.name };
-        }
-      } catch {
-        // Backend offline -> Read from VFS
-      }
+  const readFile = useCallback(async (path: string) => {
+    const content = await edge.read(path);
+    return { content, size: content.length, name: path.split("/").pop() || path };
+  }, []);
 
-      const content = vfs.readFile(path);
-      if (content !== null) {
-        return { content, size: content.length, name: path.split("/").pop() || path };
-      }
-      throw new Error(`File not found: ${path}`);
-    },
-    [],
-  );
+  const writeFile = useCallback(async (path: string, content: string) => {
+    await edge.write(path, content);
+    await refresh();
+    return true;
+  }, [refresh]);
 
-  const writeFile = useCallback(
-    async (path: string, content: string): Promise<boolean> => {
-      try {
-        const base = getBackendBase();
-        const url = `${base}/api/files/write`;
-        const res = await fetch(url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ path, content }),
-        });
-        if (res.ok) {
-          await refresh();
-          return true;
-        }
-      } catch {
-        // Backend offline -> Write to VFS
-      }
+  const deleteItem = useCallback(async (path: string) => {
+    await edge.rm(path);
+    await refresh();
+    return true;
+  }, [refresh]);
 
-      vfs.writeFile(path, content);
-      await refresh();
-      return true;
-    },
-    [refresh],
-  );
+  const mkdir = useCallback(async (path: string) => {
+    const clean = path.trim().replace(/^\/+|\/+$/g, "");
+    if (!clean) return false;
+    await edge.mkdir(clean);
+    await refresh();
+    return true;
+  }, [refresh]);
 
-  const deleteItem = useCallback(
-    async (path: string): Promise<boolean> => {
-      try {
-        const base = getBackendBase();
-        const url = `${base}/api/files/delete?path=${encodeURIComponent(path)}`;
-        const res = await fetch(url, { method: "DELETE" });
-        if (res.ok) {
-          await refresh();
-          return true;
-        }
-      } catch {
-        // Backend offline -> Delete from VFS
-      }
-
-      vfs.deleteFile(path);
-      await refresh();
-      return true;
-    },
-    [refresh],
-  );
-
-  const mkdir = useCallback(
-    async (path: string): Promise<boolean> => {
-      const cleanPath = path.trim().replace(/^\/+|\/+$/g, "");
-      if (!cleanPath) return false;
-      const keepFile = `${cleanPath}/.keep`;
-
-      try {
-        const base = getBackendBase();
-        const url = `${base}/api/files/write`;
-        const res = await fetch(url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ path: keepFile, content: "" }),
-        });
-        if (res.ok) {
-          await refresh();
-          return true;
-        }
-      } catch {
-        // Backend offline -> Write to VFS
-      }
-
-      vfs.writeFile(keepFile, "");
-      await refresh();
-      return true;
-    },
-    [refresh],
-  );
-
-  return {
-    items,
-    root,
-    loading,
-    error,
-    refresh,
-    readFile,
-    writeFile,
-    mkdir,
-    deleteItem,
-  };
+  return { items, root: "~/workspace", loading, error, refresh, readFile, writeFile, mkdir, deleteItem };
 }

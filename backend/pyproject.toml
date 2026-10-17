@@ -12,6 +12,9 @@ dependencies = [
     "requests>=2.31",
 ]
 
+[project.scripts]
+edgerunner-node = "app.cli:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",

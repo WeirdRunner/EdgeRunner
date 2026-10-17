@@ -1,0 +1,32 @@
+<!doctype html>
+<!-- Opened by a workspace preview running in its own tab: relays messages between it and the WebContainer
+     (same logic as setupConnect() in @webcontainer/api/connect). Served at /webcontainer/connect/<token>,
+     without COOP so the preview stays its opener. -->
+<meta charset="utf-8" />
+<title>Connecting preview…</title>
+<script>
+  (function () {
+    if (!window.opener) { document.write("Open this from an EdgeRunner preview."); return; }
+    var target = new URL("https://stackblitz.com");
+    target.pathname = location.pathname.replace(/^.*(\/webcontainer\/connect\/)/, "$1");
+    var iframe = document.createElement("iframe");
+    iframe.style.display = "none";
+    function ports(d) {
+      if (!d || typeof d !== "object") return [];
+      var out = [];
+      for (var k in d) {
+        var v = d[k];
+        if (Object.prototype.toString.call(v) === "[object MessagePort]") out.push(v);
+        else out = out.concat(ports(v));
+      }
+      return out;
+    }
+    window.addEventListener("message", function (e) {
+      if (e.data === "close") { window.close(); return; }
+      if (e.source === window.opener) iframe.contentWindow.postMessage(e.data, "*", ports(e.data));
+      else window.opener.postMessage(e.data, "*", ports(e.data));
+    });
+    iframe.src = target.toString();
+    document.addEventListener("DOMContentLoaded", function () { document.body.appendChild(iframe); });
+  })();
+</script>

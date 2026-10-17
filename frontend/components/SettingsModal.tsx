@@ -4,8 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import { type UseKaggle } from "@/lib/useKaggle";
 import { type UseBackend } from "@/lib/useBackend";
 import { type Settings } from "@/lib/storage";
-import { githubSync } from "@/lib/githubSync";
-import { zipExporter } from "@/lib/zipExporter";
+import { OpenRouterKey } from "./OpenRouterPanel";
+import { SecretField } from "./SecretField";
+import { NodeSettings } from "./NodeSettings";
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -35,9 +36,6 @@ export function SettingsModal({
   const [hfToken, setHfToken] = useState("");
   const [hfNotice, setHfNotice] = useState<string | null>(null);
 
-  // Git State
-  const [githubToken, setGithubToken] = useState("");
-  const [gitNotice, setGitNotice] = useState<string | null>(null);
 
   const kaggleJsonInputRef = useRef<HTMLInputElement>(null);
 
@@ -47,7 +45,6 @@ export function SettingsModal({
       setKaggleUser(localStorage.getItem("edgerunner.kaggle.username") || kaggle.username || "");
       setKaggleKey(localStorage.getItem("edgerunner.kaggle.key") || "");
       setHfToken(localStorage.getItem("edgerunner.hf.token") || "");
-      setGithubToken(localStorage.getItem("edgerunner.git.token") || "");
     }
   }, [isOpen, kaggle.username]);
 
@@ -98,11 +95,6 @@ export function SettingsModal({
     setTimeout(() => setHfNotice(null), 2500);
   }
 
-  function handleUpdateGithubToken() {
-    localStorage.setItem("edgerunner.git.token", githubToken.trim());
-    setGitNotice("✓ Updated GitHub Personal Access Token!");
-    setTimeout(() => setGitNotice(null), 2500);
-  }
 
   return (
     <div
@@ -158,6 +150,23 @@ export function SettingsModal({
           {/* TAB 1: API KEYS */}
           {activeTab === "keys" && (
             <div className="space-y-5">
+              {/* OpenRouter + agent approvals */}
+              <div className="rounded-lg border border-term-border bg-term-panel/40 p-4 space-y-3">
+                <span className="font-bold text-xs text-term-fg">OPENROUTER (MODELS IN THE BROWSER)</span>
+                <OpenRouterKey />
+                <label className="flex flex-wrap items-center gap-2 text-[11px] text-term-dim">
+                  Coding agent asks before:
+                  <select
+                    value={settings.approval ?? "auto"}
+                    onChange={(e) => onSettingsChange({ approval: e.target.value as Settings["approval"] })}
+                    className="rounded border border-term-border bg-term-bg px-1.5 py-0.5 text-[11px] text-term-fg"
+                  >
+                    <option value="auto">nothing (it works in a sandbox; undo is per reply)</option>
+                    <option value="commands">running commands</option>
+                    <option value="all">file edits and commands</option>
+                  </select>
+                </label>
+              </div>
               {/* Kaggle Credentials */}
               <div className="rounded-lg border border-term-border bg-term-panel/40 p-4 space-y-3">
                 <div className="flex items-center justify-between">
@@ -246,37 +255,19 @@ export function SettingsModal({
                 </div>
               </div>
 
-              {/* GitHub Personal Access Token */}
+              <NodeSettings settings={settings} onSettingsChange={onSettingsChange} />
+
+              {/* GitHub token */}
               <div className="rounded-lg border border-term-border bg-term-panel/40 p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="font-bold text-xs text-term-fg">GITHUB PERSONAL ACCESS TOKEN (PAT)</span>
-                  <a
-                    href="https://github.com/settings/tokens"
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-[10px] text-term-dim hover:text-term-green underline"
-                  >
-                    Generate token ↗
-                  </a>
-                </div>
-                <input
-                  type="password"
-                  placeholder="ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-                  value={githubToken}
-                  onChange={(e) => setGithubToken(e.target.value)}
-                  className="w-full rounded border border-term-border bg-term-bg px-2 py-1 text-xs text-term-fg focus:border-term-green focus:outline-none"
+                <span className="font-bold text-xs text-term-fg">GITHUB</span>
+                <SecretField
+                  name="github"
+                  label="GitHub token"
+                  placeholder="github_pat_…"
+                  help={<>Needed to push, publish and open private repos. Create a{" "}
+                    <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noreferrer" className="underline hover:text-term-fg">fine-grained token</a>
+                    {" "}with Contents: read &amp; write (and Administration: write to publish new repos). Only sent to GitHub.</>}
                 />
-                <div className="flex items-center justify-between pt-1">
-                  <button
-                    onClick={handleUpdateGithubToken}
-                    className="rounded border border-term-green/60 bg-term-green/15 px-3 py-1 text-xs font-bold text-term-green hover:bg-term-green/25 transition-colors"
-                  >
-                    Update GitHub Token
-                  </button>
-                  {gitNotice && (
-                    <span className="text-[11px] text-term-green font-mono">{gitNotice}</span>
-                  )}
-                </div>
               </div>
             </div>
           )}

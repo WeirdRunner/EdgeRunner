@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 
 import { LAUNCH_MODELS, type LaunchModel } from "@/lib/models";
+import { OR_PREFIX } from "@/lib/agent/openrouter";
+import { OpenRouterPanel } from "./OpenRouterPanel";
 import type { UseModelManager } from "@/lib/useModelManager";
 import type { UseKaggle } from "@/lib/useKaggle";
 import type { UseBackend } from "@/lib/useBackend";
@@ -55,7 +57,9 @@ export function ModelPickerModal({
   kaggle,
   backend,
 }: ModelPickerModalProps) {
-  const [tab, setTab] = useState<"curated" | "hf">("curated");
+  const [tab, setTab] = useState<"openrouter" | "curated" | "hf">(
+    currentModelId && !currentModelId.startsWith(OR_PREFIX) ? "curated" : "openrouter",
+  );
 
   // HF Trending State
   const [hfModels, setHfModels] = useState<HfModelSummary[]>([]);
@@ -356,6 +360,17 @@ export function ModelPickerModal({
         {/* Tabs */}
         <div className="flex border-b border-term-border bg-term-panel/40 px-4 pt-2 text-xs">
           <button
+            onClick={() => setTab("openrouter")}
+            className={`flex items-center gap-1.5 border-b-2 px-3.5 py-2 font-semibold transition-all ${
+              tab === "openrouter"
+                ? "border-term-green text-term-green shadow-[inset_0_-2px_0_rgba(62,207,92,0.4)]"
+                : "border-transparent text-term-dim hover:text-term-fg"
+            }`}
+          >
+            <span>☁</span>
+            <span>OpenRouter</span>
+          </button>
+          <button
             onClick={() => setTab("curated")}
             className={`flex items-center gap-1.5 border-b-2 px-3.5 py-2 font-semibold transition-all ${
               tab === "curated"
@@ -381,6 +396,15 @@ export function ModelPickerModal({
 
         {/* Modal Body */}
         <div className="flex-1 overflow-y-auto p-4 text-xs font-mono">
+          {tab === "openrouter" && (
+            <OpenRouterPanel
+              currentModelId={currentModelId}
+              onPick={(id, name) => {
+                onSelectModel({ id, name, repo: "", file: "" });
+                onClose();
+              }}
+            />
+          )}
           {tab === "curated" && (
             <div className="space-y-3">
               <p className="text-[11px] text-term-dim">

@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import re
+import shlex
 import sys
 import time
 from typing import AsyncIterator
@@ -72,7 +73,7 @@ def _extract_markdown_command(text: str) -> str | None:
 
     block_header = text[: match.start() + 10].lower()
     if "python" in block_header or "py" in block_header:
-        py_exec = sys.executable or "python3"
+        py_exec = shlex.quote(sys.executable or "python3")
         escaped = code.replace("'", "'\"'\"'")
         return f"{py_exec} -c '{escaped}'"
     return code

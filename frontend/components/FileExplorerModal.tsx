@@ -3,10 +3,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { useWorkspaceFiles, type FileItem } from "@/lib/useWorkspaceFiles";
-import { gitManager, type GitCommit } from "@/lib/gitManager";
-import { githubSync } from "@/lib/githubSync";
-import { wasmShell } from "@/lib/wasmShell";
-import { zipExporter } from "@/lib/zipExporter";
+import { edge } from "@/lib/edge/runtime";
+import { GitHubPanel } from "./GitHubPanel";
 import { FileIcon, FolderIcon } from "./FileIcons";
 
 // Dynamically load Monaco Editor (VS Code Editor Engine)
@@ -84,17 +82,6 @@ export function FileExplorerModal({ isOpen, onClose, inline }: FileExplorerModal
   const [isRunning, setIsRunning] = useState(false);
   const [runOutput, setRunOutput] = useState<{ title: string; output: string; exitCode: number } | null>(null);
 
-  // Git state
-  const [gitStatus, setGitStatus] = useState<{
-    branch: string;
-    staged: string[];
-    modified: string[];
-    untracked: string[];
-  }>({ branch: "main", staged: [], modified: [], untracked: [] });
-  const [commits, setCommits] = useState<GitCommit[]>([]);
-  const [commitMessage, setCommitMessage] = useState<string>("");
-  const [gitNotice, setGitNotice] = useState<string | null>(null);
-
   const importFileRef = useRef<HTMLInputElement>(null);
   const [isLight, setIsLight] = useState(false);
   const [mobileTab, setMobileTab] = useState<"files" | "editor">("files");
@@ -164,15 +151,9 @@ export function FileExplorerModal({ isOpen, onClose, inline }: FileExplorerModal
     };
   }, [isOpen]);
 
-  const refreshGit = () => {
-    setGitStatus(gitManager.status());
-    setCommits(gitManager.log(20));
-  };
-
   useEffect(() => {
     if (isOpen) {
       refresh();
-      refreshGit();
     }
   }, [isOpen, refresh]);
 
@@ -228,7 +209,6 @@ export function FileExplorerModal({ isOpen, onClose, inline }: FileExplorerModal
       await writeFile(selectedFile, fileContent);
       setOriginalContent(fileContent);
       setSaveStatus("✓ saved");
-      refreshGit();
       setTimeout(() => setSaveStatus(null), 2000);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -238,11 +218,13 @@ export function FileExplorerModal({ isOpen, onClose, inline }: FileExplorerModal
     }
   }
 
+  const saveRef = useRef(handleSave);
+  saveRef.current = handleSave;
+
   async function handleDelete(path: string) {
     if (!confirm(`Delete ${path}?`)) return;
     await deleteItem(path);
     handleCloseTab(path);
-    refreshGit();
   }
 
   async function handleCreateNewFile() {
@@ -252,7 +234,6 @@ export function FileExplorerModal({ isOpen, onClose, inline }: FileExplorerModal
     setNewFileName("");
     setShowNewFileInput(false);
     handleSelectFile(name);
-    refreshGit();
   }
 
   async function handleCreateNewFolder() {
@@ -261,62 +242,30 @@ export function FileExplorerModal({ isOpen, onClose, inline }: FileExplorerModal
     await mkdir(name);
     setNewFolderName("");
     setShowNewFolderInput(false);
-    refreshGit();
   }
 
   async function handleRunCurrentFile() {
     if (!selectedFile) return;
+    const f = selectedFile;
+    const cmd = /\.(m|c)?js$/.test(f) ? `node ${f}`
+      : /\.(m|c)?ts$/.test(f) ? `npx -y tsx ${f}`
+      : /\.sh$/.test(f) ? `sh ${f}`
+      : f.endsWith("package.json") ? `cd ${f.split("/").slice(0, -1).join("/") || "."} && npm start`
+      : null;
+    if (!cmd) {
+      setRunOutput({ title: f, output: "This file type can't run in the browser workspace (it has Node.js, not Python, C, Go or Rust). Open it on your Mac node instead.", exitCode: 1 });
+      return;
+    }
     setIsRunning(true);
-    let cmd = selectedFile;
-    if (selectedFile.endsWith(".py")) cmd = `python3 ${selectedFile}`;
-    else if (selectedFile.endsWith(".js") || selectedFile.endsWith(".mjs")) cmd = `node ${selectedFile}`;
-    else if (selectedFile.endsWith(".sh") || selectedFile.endsWith(".bash")) cmd = `bash ${selectedFile}`;
-    else if (selectedFile.endsWith(".c")) cmd = `gcc ${selectedFile}`;
-    else if (selectedFile.endsWith(".cpp")) cmd = `g++ ${selectedFile}`;
-    else if (selectedFile.endsWith(".rs")) cmd = `rustc ${selectedFile}`;
-    else if (selectedFile.endsWith(".go")) cmd = `go ${selectedFile}`;
-    else cmd = `cat ${selectedFile}`;
-
     try {
-      const res = await wasmShell.execute(cmd);
-      setRunOutput({
-        title: cmd,
-        output: res.output || "(no output)",
-        exitCode: res.exitCode,
-      });
+      if (fileContent !== originalContent) await handleSave();
+      const res = await edge.exec(cmd, { timeoutMs: 120_000 });
+      setRunOutput({ title: cmd, output: res.output || "(no output)", exitCode: res.code });
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setRunOutput({ title: cmd, output: `error: ${msg}`, exitCode: 1 });
+      setRunOutput({ title: cmd, output: `error: ${err instanceof Error ? err.message : String(err)}`, exitCode: 1 });
     } finally {
       setIsRunning(false);
     }
-  }
-
-  function handleStageAll() {
-    gitManager.add(".");
-    refreshGit();
-    setGitNotice("✓ Staged all changes");
-    setTimeout(() => setGitNotice(null), 2500);
-  }
-
-  function handleStageFile(file: string) {
-    gitManager.add(file);
-    refreshGit();
-  }
-
-  function handleCommit() {
-    if (!commitMessage.trim()) return;
-    gitManager.commit(commitMessage.trim());
-    setCommitMessage("");
-    refreshGit();
-    setGitNotice("✓ Commit successful");
-    setTimeout(() => setGitNotice(null), 2500);
-  }
-
-  function handleCheckout(branchOrHash: string) {
-    gitManager.checkout(branchOrHash);
-    refreshGit();
-    refresh();
   }
 
   async function handleImportFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -328,7 +277,6 @@ export function FileExplorerModal({ isOpen, onClose, inline }: FileExplorerModal
       await writeFile(file.name, text);
     }
     refresh();
-    refreshGit();
   }
 
   // Flattened file list for searching
@@ -386,7 +334,7 @@ export function FileExplorerModal({ isOpen, onClose, inline }: FileExplorerModal
 
           <div className="flex items-center gap-2">
             <button
-              onClick={() => zipExporter.downloadZip()}
+              onClick={() => void edge.downloadZip()}
               className="flex items-center gap-1.5 rounded border border-term-border px-2.5 py-1 text-xs text-term-dim hover:text-term-green hover:border-term-green transition-colors"
               title="Download entire workspace as a .zip file"
             >
@@ -437,23 +385,19 @@ export function FileExplorerModal({ isOpen, onClose, inline }: FileExplorerModal
               onClick={() => {
                 setActivityTab("git");
                 setMobileTab("files");
-                refreshGit();
-              }}
+                        }}
               className={`p-2 rounded transition-colors relative ${
                 activityTab === "git" ? "text-term-green bg-term-green/10" : "text-term-dim hover:text-term-fg"
               }`}
-              title="Source Control (Git DAG)"
+              title="GitHub: clone, commit & push, pull"
             >
               <svg className="w-5 h-5 fill-current" viewBox="0 0 24 24">
                 <path d="M19.5 8a3.5 3.5 0 0 0-3.32 2.41 4.5 4.5 0 0 0-4.68 3.59A3.5 3.5 0 0 0 8 13.5V6.82a3.5 3.5 0 1 0-2 0v10.36a3.5 3.5 0 1 0 2.05.58 4.48 4.48 0 0 0 4.14-3.26 4.51 4.51 0 0 0 3.81-2.9 3.5 3.5 0 1 0 3.5-3.1zM6 4a1.5 1.5 0 1 1-1.5 1.5A1.5 1.5 0 0 1 6 4zm1 16a1.5 1.5 0 1 1 1.5-1.5A1.5 1.5 0 0 1 7 20zm12.5-9a1.5 1.5 0 1 1 1.5-1.5 1.5 1.5 0 0 1-1.5 1.5z"/>
               </svg>
-              {gitStatus.modified.length > 0 && (
-                <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-term-green" />
-              )}
             </button>
 
             <button
-              onClick={() => zipExporter.downloadZip()}
+              onClick={() => void edge.downloadZip()}
               className="mt-auto p-2 rounded transition-colors text-term-dim hover:text-term-green hover:bg-term-green/10"
               title="Export Workspace as .ZIP"
             >
@@ -652,156 +596,7 @@ export function FileExplorerModal({ isOpen, onClose, inline }: FileExplorerModal
             )}
 
             {activityTab === "git" && (
-              <div className="flex-1 flex flex-col p-3 overflow-y-auto space-y-3 text-xs">
-                <div className="flex items-center justify-between border-b border-term-border pb-2">
-                  <span className="font-bold text-term-fg uppercase tracking-wider">Source Control (Git)</span>
-                  <button
-                    onClick={handleStageAll}
-                    className="text-[11px] font-bold text-term-green hover:underline"
-                  >
-                    + Stage All
-                  </button>
-                </div>
-
-                {/* Staged & Modified Files */}
-                <div className="space-y-1.5">
-                  <span className="text-[11px] uppercase font-bold text-term-dim">
-                    Changes ({gitStatus.staged.length + gitStatus.modified.length + gitStatus.untracked.length})
-                  </span>
-                  <div className="space-y-1 max-h-36 overflow-y-auto">
-                    {gitStatus.staged.map((f) => (
-                      <div key={f} className="flex items-center justify-between text-term-green text-xs">
-                        <span className="truncate flex items-center gap-1">
-                          <svg className="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24">
-                            <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
-                          </svg>
-                          {f}
-                        </span>
-                        <span className="text-[10px] uppercase">[staged]</span>
-                      </div>
-                    ))}
-                    {gitStatus.modified.map((f) => (
-                      <div key={f} className="flex items-center justify-between text-term-amber text-xs">
-                        <span className="truncate">● {f}</span>
-                        <button
-                          onClick={() => handleStageFile(f)}
-                          className="text-[10px] text-term-dim hover:text-term-fg"
-                        >
-                          + stage
-                        </button>
-                      </div>
-                    ))}
-                    {gitStatus.untracked.map((f) => (
-                      <div key={f} className="flex items-center justify-between text-term-dim text-xs">
-                        <span className="truncate">? {f}</span>
-                        <button
-                          onClick={() => handleStageFile(f)}
-                          className="text-[10px] text-term-dim hover:text-term-fg"
-                        >
-                          + stage
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Commit Box */}
-                <div className="space-y-1.5 pt-2 border-t border-term-border">
-                  <textarea
-                    value={commitMessage}
-                    onChange={(e) => setCommitMessage(e.target.value)}
-                    placeholder="Commit message (⌘Enter to commit)…"
-                    className="w-full h-16 p-2 rounded border border-term-border bg-term-bg text-term-fg text-xs focus:outline-none focus:border-term-green resize-none"
-                  />
-                  <button
-                    onClick={handleCommit}
-                    disabled={!commitMessage.trim()}
-                    className="w-full rounded border border-term-green/60 bg-term-green/20 py-1 text-xs font-bold text-term-green hover:bg-term-green/30 disabled:opacity-40"
-                  >
-                    Commit
-                  </button>
-                  {gitNotice && (
-                    <p className="text-xs text-center text-term-green font-semibold">{gitNotice}</p>
-                  )}
-                </div>
-
-                {/* GitHub Remote Sync & Storage Export (Workspace Integrated) */}
-                <div className="space-y-2 pt-3 border-t border-term-border">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] uppercase font-bold text-term-dim">Remote Sync & Storage</span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-1.5">
-                    <button
-                      onClick={async () => {
-                        const token = typeof window !== "undefined" ? localStorage.getItem("edgerunner.git.token") || "" : "";
-                        const repo = typeof window !== "undefined" ? localStorage.getItem("edgerunner.git.repo") || "" : "";
-                        const branch = typeof window !== "undefined" ? localStorage.getItem("edgerunner.git.branch") || "main" : "main";
-                        if (!token || !repo) {
-                          setGitNotice("Configure GitHub Token in Settings (⚙) first.");
-                          return;
-                        }
-                        setGitNotice("Pushing to GitHub…");
-                        try {
-                          const res = await githubSync.push({ token, repo, branch }, (m) => setGitNotice(m));
-                          setGitNotice(`✓ Pushed commit ${res.sha.slice(0, 7)}!`);
-                        } catch (err: unknown) {
-                          setGitNotice(`Push failed: ${err instanceof Error ? err.message : String(err)}`);
-                        }
-                      }}
-                      className="flex items-center justify-center gap-1 rounded border border-term-border bg-term-panel py-1 text-[11px] font-semibold text-term-dim hover:text-term-green hover:border-term-green transition-colors"
-                      title="Push workspace to remote GitHub repo"
-                    >
-                      <span>↑ Push</span>
-                    </button>
-                    <button
-                      onClick={async () => {
-                        const token = typeof window !== "undefined" ? localStorage.getItem("edgerunner.git.token") || "" : "";
-                        const repo = typeof window !== "undefined" ? localStorage.getItem("edgerunner.git.repo") || "" : "";
-                        const branch = typeof window !== "undefined" ? localStorage.getItem("edgerunner.git.branch") || "main" : "main";
-                        if (!repo) {
-                          setGitNotice("No remote repo configured.");
-                          return;
-                        }
-                        setGitNotice("Pulling from GitHub…");
-                        try {
-                          const res = await githubSync.pull({ token, repo, branch }, (m) => setGitNotice(m));
-                          setGitNotice(`✓ Pulled ${res.filesCount} files!`);
-                          refresh();
-                        } catch (err: unknown) {
-                          setGitNotice(`Pull failed: ${err instanceof Error ? err.message : String(err)}`);
-                        }
-                      }}
-                      className="flex items-center justify-center gap-1 rounded border border-term-border bg-term-panel py-1 text-[11px] font-semibold text-term-dim hover:text-term-green hover:border-term-green transition-colors"
-                      title="Pull latest files from remote GitHub repo"
-                    >
-                      <span>↓ Pull</span>
-                    </button>
-                    <button
-                      onClick={() => zipExporter.downloadZip()}
-                      className="flex items-center justify-center gap-1 rounded border border-term-border bg-term-panel py-1 text-[11px] font-semibold text-term-dim hover:text-term-fg transition-colors"
-                      title="Download complete workspace as .ZIP"
-                    >
-                      <span>📦 .ZIP</span>
-                    </button>
-                    <button
-                      onClick={() => {
-                        const json = gitManager.exportBundle();
-                        const blob = new Blob([json], { type: "application/json" });
-                        const url = URL.createObjectURL(blob);
-                        const a = document.createElement("a");
-                        a.href = url;
-                        a.download = `edgerunner-bundle-${Date.now()}.json`;
-                        a.click();
-                        URL.revokeObjectURL(url);
-                      }}
-                      className="flex items-center justify-center gap-1 rounded border border-term-border bg-term-panel py-1 text-[11px] font-semibold text-term-dim hover:text-term-fg transition-colors"
-                      title="Export entire workspace and git DAG as portable JSON bundle"
-                    >
-                      <span>💾 Export</span>
-                    </button>
-                  </div>
-                </div>
-              </div>
+              <GitHubPanel onOpenFile={(p) => { void handleSelectFile(p); setMobileTab("editor"); }} onChanged={() => void refresh()} />
             )}
           </div>
 
@@ -896,6 +691,10 @@ export function FileExplorerModal({ isOpen, onClose, inline }: FileExplorerModal
                       value={fileContent}
                       theme={isLight ? "vs" : "vs-dark"}
                       onChange={(v) => setFileContent(v || "")}
+                      onMount={(editor, monaco) => {
+                        // ⌘S / Ctrl+S saves (the ref always points at the latest handleSave).
+                        editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => void saveRef.current());
+                      }}
                       keepCurrentModel={true}
                       options={{
                         minimap: { enabled: true },
@@ -954,7 +753,7 @@ export function FileExplorerModal({ isOpen, onClose, inline }: FileExplorerModal
               <svg className="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24">
                 <path d="M19.5 8a3.5 3.5 0 0 0-3.32 2.41 4.5 4.5 0 0 0-4.68 3.59A3.5 3.5 0 0 0 8 13.5V6.82a3.5 3.5 0 1 0-2 0v10.36a3.5 3.5 0 1 0 2.05.58 4.48 4.48 0 0 0 4.14-3.26 4.51 4.51 0 0 0 3.81-2.9 3.5 3.5 0 1 0 3.5-3.1zM6 4a1.5 1.5 0 1 1-1.5 1.5A1.5 1.5 0 0 1 6 4zm1 16a1.5 1.5 0 1 1 1.5-1.5A1.5 1.5 0 0 1 7 20zm12.5-9a1.5 1.5 0 1 1 1.5-1.5 1.5 1.5 0 0 1-1.5 1.5z"/>
               </svg>
-              <span className="truncate max-w-[100px]">{gitStatus.branch}</span>
+              <span className="truncate max-w-[140px]">workspace</span>
             </span>
             <span className="hidden xs:inline">0 ⊗ 0 ⚠</span>
           </div>

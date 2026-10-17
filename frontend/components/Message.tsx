@@ -220,12 +220,14 @@ function parseChronologicalSegments(
     const closeThinkMatch = remaining.match(/<\/(?:think|thought|reasoning|thought_process)>|\[\/THINK\]/i);
     const toolCallMatch = remaining.match(/<tool_call>([\s\S]*?)<\/tool_call>/i);
     const fnCallMatch = remaining.match(/<function(?:=|\s+name=[\"']?)([\w\-_]+)[\"']?\s*>([\s\S]*?)<\/function>/i);
+    const refMatch = remaining.match(/<tool_ref id="([^"]+)"\/>/);
 
     const matches = [
       openThinkMatch && openThinkMatch.index !== undefined ? { type: "open_think", idx: openThinkMatch.index, match: openThinkMatch } : null,
       closeThinkMatch && closeThinkMatch.index !== undefined ? { type: "close_think", idx: closeThinkMatch.index, match: closeThinkMatch } : null,
       toolCallMatch && toolCallMatch.index !== undefined ? { type: "tool_call", idx: toolCallMatch.index, match: toolCallMatch } : null,
       fnCallMatch && fnCallMatch.index !== undefined ? { type: "fn_call", idx: fnCallMatch.index, match: fnCallMatch } : null,
+      refMatch && refMatch.index !== undefined ? { type: "tool_ref", idx: refMatch.index, match: refMatch } : null,
     ].filter(Boolean).sort((a, b) => a!.idx - b!.idx);
 
     if (matches.length === 0) {
@@ -259,6 +261,11 @@ function parseChronologicalSegments(
       if (thoughtContent) {
         segments.push({ type: "think", content: thoughtContent, open: false });
       }
+      remaining = remaining.slice(first.idx + first.match[0].length);
+    } else if (first.type === "tool_ref") {
+      if (prefix.trim()) segments.push({ type: "markdown", content: prefix.trim() });
+      const i = toolsPool.findIndex((t) => t.id === first.match[1]);
+      if (i !== -1) segments.push({ type: "tool", tool: toolsPool.splice(i, 1)[0] });
       remaining = remaining.slice(first.idx + first.match[0].length);
     } else if (first.type === "tool_call" || first.type === "fn_call") {
       if (prefix.trim()) segments.push({ type: "markdown", content: prefix.trim() });
@@ -342,6 +349,7 @@ function AssistantBody({
     () => parseChronologicalSegments(content, tools),
     [content, tools],
   );
+  const runId = tools?.find((t) => t.diff && t.run_id)?.run_id;
 
   if (segments.length === 0) {
     return <Markdown content={content} />;
@@ -373,126 +381,121 @@ function AssistantBody({
 
         return <Markdown key={`md_${idx}`} content={seg.content} />;
       })}
+      {!streaming && runId && <UndoRun runId={runId} />}
     </div>
   );
 }
 
-function ToolCall({ tool }: { tool: ToolEvent }) {
-  const [open, setOpen] = useState(false);
-  const [localRunning, setLocalRunning] = useState(false);
-  const [localResult, setLocalResult] = useState<string | null>(tool.result || null);
-
-  const isDone = Boolean(localResult || tool.result);
-  const displayResult = localResult || tool.result;
-
-  const handleRunInTerminal = async (e?: React.MouseEvent) => {
-    if (e) e.stopPropagation();
-    let cmd = tool.arguments || "";
-    try {
-      const parsed = JSON.parse(cmd);
-      if (typeof parsed === "object") {
-        cmd = parsed.command || parsed.cmd || parsed.code || cmd;
-      }
-    } catch {}
-
-    if (!cmd.trim()) return;
-
-    setLocalRunning(true);
-    try {
-      // 1. Try executing via backend API if available
-      const backendUrl = typeof window !== "undefined" ? localStorage.getItem("edgerunner.backendUrl") : null;
-      let executed = false;
-      let outputText = "";
-
-      if (backendUrl) {
-        try {
-          const res = await fetch(`${backendUrl.replace(/\/+$/, "")}/api/terminal/exec`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ command: cmd }),
-          });
-          if (res.ok) {
-            const data = await res.json();
-            outputText = data.output ? `${data.output}\n● exit ${data.exit_code}` : `● exit ${data.exit_code}`;
-            executed = true;
-          }
-        } catch {}
-      }
-
-      // 2. Fallback to in-browser WebAssembly shell execution
-      if (!executed) {
-        const { wasmShell } = await import("@/lib/wasmShell");
-        const res = await wasmShell.execute(cmd);
-        outputText = res.output ? `${res.output}\n● exit ${res.exitCode}` : `● exit ${res.exitCode}`;
-      }
-
-      setLocalResult(outputText);
-      setOpen(true);
-    } catch (err: unknown) {
-      setLocalResult(`error: ${err instanceof Error ? err.message : String(err)}`);
-      setOpen(true);
-    } finally {
-      setLocalRunning(false);
+// One-line summary of a tool call's arguments ("npm test", "src/app.ts").
+function argSummary(tool: ToolEvent): string {
+  if (!tool.arguments) return "";
+  try {
+    const a = JSON.parse(tool.arguments);
+    if (a && typeof a === "object") {
+      return String(a.command ?? a.path ?? a.pattern ?? a.cmd ?? a.code ?? tool.arguments);
     }
-  };
+  } catch {}
+  return tool.arguments;
+}
 
-  const isFailed = Boolean(
-    displayResult &&
-      ((displayResult.includes("exit code") && !displayResult.includes("exit code 0") && !displayResult.includes("● exit 0")) ||
-        displayResult.startsWith("error:") ||
-        displayResult.includes("[stderr]"))
+function DiffView({ diff }: { diff: string }) {
+  return (
+    <pre className="mt-1.5 max-h-72 overflow-auto rounded border border-term-border/40 bg-term-bg/80 p-2 text-[11px] leading-relaxed">
+      {diff.split("\n").map((l, i) => (
+        <div
+          key={i}
+          className={
+            l.startsWith("+") ? "text-term-green" : l.startsWith("-") ? "text-term-red" : l.startsWith("@@") ? "text-term-amber" : "text-term-dim"
+          }
+        >
+          {l || " "}
+        </div>
+      ))}
+    </pre>
   );
+}
+
+function ToolCall({ tool }: { tool: ToolEvent }) {
+  const status = tool.status ?? (tool.result != null ? "done" : "running");
+  const [open, setOpen] = useState(false);
+  const [decided, setDecided] = useState(false);
+  const summary = argSummary(tool);
+  const failed =
+    status === "failed" ||
+    (!tool.status && Boolean(tool.result && /exit code [1-9]|^error:/m.test(tool.result)));
+
+  const decideCall = async (ok: boolean) => {
+    setDecided(true);
+    const { decide } = await import("@/lib/agent/agent");
+    decide(tool.id, ok);
+  };
 
   return (
     <div className="rounded border border-term-border bg-term-panel/50 px-2.5 py-1.5 text-xs font-mono">
       <div
-        className="flex cursor-pointer items-center justify-between gap-2 text-xs"
-        onClick={() => isDone && setOpen((o) => !o)}
+        className="flex cursor-pointer items-center justify-between gap-2"
+        onClick={() => (tool.result || tool.diff) && setOpen((o) => !o)}
       >
-        <div className="flex items-center gap-1.5 truncate">
-          <span className="text-term-dim">tool:</span>
-          <span className="text-term-green font-semibold">{tool.name}</span>
-          {tool.arguments && (
-            <span className="truncate text-term-dim text-[11px] max-w-[200px] sm:max-w-md">
-              ({tool.arguments})
-            </span>
-          )}
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span className={failed ? "text-term-red" : status === "denied" ? "text-term-dim" : "text-term-green"}>
+            {failed ? "✗" : status === "denied" ? "⊘" : status === "done" ? "✓" : "●"}
+          </span>
+          <span className="font-semibold text-term-fg">{tool.name}</span>
+          {summary && <span className="truncate text-[11px] text-term-dim">{summary}</span>}
         </div>
-        <div className="flex items-center gap-2 shrink-0">
-          {!isDone && (
-            <span className="flex items-center gap-1.5 text-[10px] text-term-green animate-pulse font-medium">
-              <span className="inline-block h-1.5 w-1.5 rounded-full bg-term-green"></span>
-              <span>{localRunning ? "running…" : "executing…"}</span>
-            </span>
-          )}
-          {isDone && (
-            <div className="flex items-center gap-1.5">
-              {isFailed && (
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleRunInTerminal();
-                  }}
-                  disabled={localRunning}
-                  className="flex items-center gap-1 rounded bg-term-red/10 border border-term-red/40 px-1.5 py-0.5 text-[10px] font-semibold text-term-red hover:bg-term-red/20 transition-colors"
-                  title="Execution failed. Click to re-run in active terminal"
-                >
-                  <span>{localRunning ? "retrying…" : "↺ Retry in Terminal"}</span>
-                </button>
-              )}
-              <span className="text-[10px] text-term-dim">
-                {open ? "▾ hide" : "▸ result"}
-              </span>
-            </div>
-          )}
+        <div className="flex shrink-0 items-center gap-2 text-[10px]">
+          {status === "running" && <span className="animate-pulse text-term-green">running…</span>}
+          {status === "denied" && <span className="text-term-dim">declined</span>}
+          {(tool.result || tool.diff) && <span className="text-term-dim">{open ? "▾ hide" : "▸ details"}</span>}
         </div>
       </div>
-      {open && displayResult && (
-        <pre className="mt-1.5 max-h-48 overflow-y-auto rounded bg-term-bg/80 p-2 text-xs text-term-fg leading-relaxed whitespace-pre-wrap break-words border border-term-border/40 font-mono">
-          {displayResult}
+      {status === "approval" && (
+        <div className="mt-1.5 flex items-center gap-2">
+          <span className="text-[11px] text-term-amber">Allow this?</span>
+          <button
+            disabled={decided}
+            onClick={() => decideCall(true)}
+            className="rounded border border-term-green/50 bg-term-green/10 px-2 py-0.5 text-[11px] text-term-green hover:bg-term-green/20 disabled:opacity-50"
+          >
+            Allow
+          </button>
+          <button
+            disabled={decided}
+            onClick={() => decideCall(false)}
+            className="rounded border border-term-red/40 px-2 py-0.5 text-[11px] text-term-red hover:bg-term-red/10 disabled:opacity-50"
+          >
+            Deny
+          </button>
+        </div>
+      )}
+      {tool.diff && (open || status === "done") && <DiffView diff={tool.diff} />}
+      {open && tool.result && !tool.diff && (
+        <pre className="mt-1.5 max-h-60 overflow-y-auto whitespace-pre-wrap break-words rounded border border-term-border/40 bg-term-bg/80 p-2 text-xs leading-relaxed text-term-fg">
+          {tool.result}
         </pre>
       )}
     </div>
+  );
+}
+
+// Put back every file an agent reply changed.
+function UndoRun({ runId }: { runId: string }) {
+  const [state, setState] = useState<"idle" | "busy" | "done">("idle");
+  const [files, setFiles] = useState<string[]>([]);
+  return (
+    <button
+      disabled={state !== "idle"}
+      onClick={async () => {
+        setState("busy");
+        const { undoRun } = await import("@/lib/agent/agent");
+        setFiles(await undoRun(runId));
+        setState("done");
+      }}
+      className="rounded border border-term-border px-2 py-0.5 text-[11px] text-term-dim hover:text-term-fg disabled:opacity-60"
+      title="Restore the files this reply changed"
+    >
+      {state === "done" ? (files.length ? `restored ${files.length} file${files.length > 1 ? "s" : ""}` : "nothing to undo (reload clears undo history)") : state === "busy" ? "undoing…" : "↶ undo file changes"}
+    </button>
   );
 }
 

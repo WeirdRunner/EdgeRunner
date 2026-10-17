@@ -1,4 +1,5 @@
-// localStorage-backed conversation store.
+import { idb } from "./edge/idb";
+// Client-side stores: conversations (IndexedDB), settings and selections (localStorage).
 //
 // The backend (on Kaggle, behind a tunnel) is ephemeral, so conversation
 // history lives client-side. All access is guarded for SSR — on the server
@@ -16,12 +17,18 @@ export interface Settings {
   temperature: number;
   maxTokens: number;
   topP: number;
+  // When the coding agent must ask first: never / before commands / before edits and commands.
+  approval?: "auto" | "commands" | "all";
+  // The same for projects on the Mac node (real files: asks before commands unless changed).
+  nodeApproval?: "auto" | "commands" | "all";
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   temperature: 0.7,
   maxTokens: 1024,
   topP: 0.95,
+  approval: "auto",
+  nodeApproval: "commands",
 };
 
 // Timing/throughput telemetry for one assistant response.
@@ -42,6 +49,8 @@ export interface Conversation {
   title: string;
   model: string;
   harness: string;
+  // Where the agent works: "browser" (default) or "node:<projectId>" (a project on the Mac node).
+  target?: string;
   preset?: "code" | "standard" | "minimal" | "creator";
   parentId?: string;
   forkIndex?: number;
@@ -55,21 +64,31 @@ function hasStorage(): boolean {
   return typeof window !== "undefined" && !!window.localStorage;
 }
 
-export function loadConversations(): Conversation[] {
+// Conversations live in IndexedDB (tool output makes them too big for localStorage's ~5 MB).
+// Older versions kept them in localStorage; they are moved over on first load.
+export async function loadConversations(): Promise<Conversation[]> {
   if (!hasStorage()) return [];
   try {
+    const saved = await idb.get<Conversation[]>(KEY);
+    if (Array.isArray(saved)) return saved;
     const raw = window.localStorage.getItem(KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as Conversation[];
-    return Array.isArray(parsed) ? parsed : [];
+    const parsed = raw ? (JSON.parse(raw) as Conversation[]) : [];
+    if (Array.isArray(parsed) && parsed.length) {
+      await idb.set(KEY, parsed);
+      window.localStorage.removeItem(KEY);
+      return parsed;
+    }
   } catch {
-    return [];
+    /* fall through */
   }
+  return [];
 }
 
+let saveTimer: ReturnType<typeof setTimeout> | null = null;
 export function saveConversations(convos: Conversation[]): void {
   if (!hasStorage()) return;
-  window.localStorage.setItem(KEY, JSON.stringify(convos));
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => void idb.set(KEY, convos).catch((e) => console.warn("couldn't save conversations", e)), 400);
 }
 
 export function loadActiveId(): string | null {
@@ -107,6 +126,15 @@ export function loadSelectedHarness(): string | null {
 export function saveSelectedHarness(harness: string): void {
   if (!hasStorage()) return;
   window.localStorage.setItem(HARNESS_KEY, harness);
+}
+
+export function loadTarget(): string {
+  if (!hasStorage()) return "browser";
+  return window.localStorage.getItem("edgerunner.target") || "browser";
+}
+
+export function saveTarget(target: string): void {
+  if (hasStorage()) window.localStorage.setItem("edgerunner.target", target);
 }
 
 export function loadSelectedModel(): string | null {

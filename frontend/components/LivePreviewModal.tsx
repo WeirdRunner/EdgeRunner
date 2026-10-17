@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { vfs } from "@/lib/wasmShell";
+import { edge } from "@/lib/edge/runtime";
 
 interface LivePreviewModalProps {
   isOpen: boolean;
@@ -19,16 +19,33 @@ export function LivePreviewModal({ isOpen, onClose, initialUrl }: LivePreviewMod
   const [showConsole, setShowConsole] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
-  // Scan VFS for HTML files on open
+  // Workspace web files (html/css/js), read when the preview opens or files change.
+  const [files, setFiles] = useState<Map<string, string>>(new Map());
+  const [servers, setServers] = useState<[number, string][]>([]);
   useEffect(() => {
     if (!isOpen) return;
-    const all = vfs.listFiles();
-    const htmls = all.filter((f) => f.endsWith(".html") || f.endsWith(".htm"));
-    setHtmlFiles(htmls.length > 0 ? htmls : ["index.html"]);
-    if (htmls.length > 0 && !htmls.includes(selectedFile)) {
-      setSelectedFile(htmls[0]);
-    }
-  }, [isOpen, selectedFile]);
+    const load = async () => {
+      const paths = (await edge.walk(".", 3000).catch(() => [] as string[])).filter((f) => /\.(html?|css|m?js)$/.test(f));
+      const map = new Map<string, string>();
+      for (const p of paths.slice(0, 300)) map.set(p, await edge.read(p).catch(() => ""));
+      setFiles(map);
+      const htmls = paths.filter((f) => /\.html?$/.test(f));
+      setHtmlFiles(htmls.length ? htmls : ["index.html"]);
+      setSelectedFile((cur) => (htmls.length && !htmls.includes(cur) ? htmls[0] : cur));
+    };
+    void load();
+    const showServers = () => {
+      const list = [...edge.servers.entries()];
+      setServers(list);
+      if (list.length && !initialUrl) { setCustomUrl((u) => u || list[list.length - 1][1]); setMode((m) => (m === "vfs" && !customUrl ? "url" : m)); }
+    };
+    showServers();
+    const offS = edge.onServers(showServers);
+    const offF = edge.onFiles(() => void load());
+    return () => { offS(); offF(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen]);
+  const readWs = (p: string): string | null => files.get(p.replace(/^\.?\//, "")) ?? null;
 
   // Update URL when initialUrl changes
   useEffect(() => {
@@ -40,7 +57,7 @@ export function LivePreviewModal({ isOpen, onClose, initialUrl }: LivePreviewMod
 
   // Render HTML content with auto-injected script & relative asset resolution
   function generateHtmlBundle(): string {
-    const rawHtml = vfs.readFile(selectedFile) || `<!DOCTYPE html>
+    const rawHtml = readWs(selectedFile) || `<!DOCTYPE html>
 <html>
 <head>
   <title>EdgeRunner Live Preview</title>
@@ -61,13 +78,13 @@ export function LivePreviewModal({ isOpen, onClose, initialUrl }: LivePreviewMod
     // Inline linked local CSS and JS files from VFS
     bundled = bundled.replace(/<link\s+[^>]*href=["']([^"']+\.css)["'][^>]*>/gi, (match, href) => {
       const cleanHref = href.replace(/^\.?\//, "");
-      const cssContent = vfs.readFile(cleanHref);
+      const cssContent = readWs(cleanHref);
       return cssContent ? `<style>/* ${cleanHref} */\n${cssContent}\n</style>` : match;
     });
 
     bundled = bundled.replace(/<script\s+[^>]*src=["']([^"']+\.js)["'][^>]*>\s*<\/script>/gi, (match, src) => {
       const cleanSrc = src.replace(/^\.?\//, "");
-      const jsContent = vfs.readFile(cleanSrc);
+      const jsContent = readWs(cleanSrc);
       return jsContent ? `<script>/* ${cleanSrc} */\n${jsContent}\n</script>` : match;
     });
 
@@ -111,7 +128,8 @@ export function LivePreviewModal({ isOpen, onClose, initialUrl }: LivePreviewMod
     if (isOpen) {
       reloadIframe();
     }
-  }, [isOpen, selectedFile, mode, customUrl]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, selectedFile, mode, customUrl, files]);
 
   useEffect(() => {
     function handleMessage(e: MessageEvent) {
@@ -172,7 +190,7 @@ export function LivePreviewModal({ isOpen, onClose, initialUrl }: LivePreviewMod
                 onClick={() => setMode("url")}
                 className={`px-1.5 py-0.5 rounded ${mode === "url" ? "bg-term-green/20 text-term-green font-semibold" : "text-term-dim"}`}
               >
-                URL / Port
+                {servers.length ? `Servers (${servers.length})` : "URL"}
               </button>
             </div>
           </div>
@@ -192,14 +210,27 @@ export function LivePreviewModal({ isOpen, onClose, initialUrl }: LivePreviewMod
                 ))}
               </select>
             ) : (
+              <>
+              {servers.length > 0 && (
+                <select
+                  value={servers.find(([, u]) => u === customUrl) ? customUrl : ""}
+                  onChange={(e) => e.target.value && setCustomUrl(e.target.value)}
+                  className="rounded border border-term-border bg-term-bg px-1 py-0.5 text-xs text-term-fg"
+                  title="Dev servers running in the workspace"
+                >
+                  <option value="">port…</option>
+                  {servers.map(([port, url]) => <option key={port} value={url}>:{port}</option>)}
+                </select>
+              )}
               <input
                 type="text"
                 value={customUrl}
                 onChange={(e) => setCustomUrl(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && reloadIframe()}
-                placeholder="http://localhost:3000, https://…"
+                placeholder="run a dev server (npm run dev) or paste a URL"
                 className="flex-1 rounded border border-term-border bg-term-bg px-2 py-0.5 text-xs text-term-fg focus:outline-none focus:border-term-green"
               />
+              </>
             )}
             <button
               onClick={reloadIframe}
@@ -250,7 +281,7 @@ export function LivePreviewModal({ isOpen, onClose, initialUrl }: LivePreviewMod
         </div>
 
         {/* Informative notice for external URL security restrictions */}
-        {mode === "url" && customUrl && !customUrl.includes("localhost") && !customUrl.includes("127.0.0.1") && (
+        {mode === "url" && customUrl && !/localhost|127\.0\.0\.1|webcontainer-api\.io/.test(customUrl) && (
           <div className="bg-term-amber/10 border-b border-term-amber/30 px-3 py-1 text-[11px] text-term-amber flex items-center justify-between">
             <span className="truncate">
               Note: External websites (like github.com) may block iframe embedding via X-Frame-Options headers.
@@ -271,6 +302,7 @@ export function LivePreviewModal({ isOpen, onClose, initialUrl }: LivePreviewMod
               ref={iframeRef}
               className="w-full h-full border-0 bg-white"
               sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
+              allow="cross-origin-isolated"
               title="EdgeRunner Sandboxed Preview"
             />
           </div>

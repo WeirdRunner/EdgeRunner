@@ -1,6 +1,8 @@
 // For GitHub Pages we build a static export served from a project subpath
 // (https://<user>.github.io/EdgeRunner/). The workflow sets GITHUB_PAGES=true;
 // local `next dev` / `next build` stay at the root with no export.
+import { PHASE_DEVELOPMENT_SERVER } from "next/constants.js";
+
 const isPages = process.env.GITHUB_PAGES === "true";
 const basePath = isPages ? "/EdgeRunner" : "";
 
@@ -37,4 +39,9 @@ const nextConfig = {
     : {}),
 };
 
-export default nextConfig;
+// Local development only: OPENROUTER_API_KEY from frontend/.env.local (git-ignored) stands in for a key saved in
+// Settings. Only the dev server defines it, so no build (and no deployed page) can contain it.
+export default (phase) => {
+  const devKey = phase === PHASE_DEVELOPMENT_SERVER ? process.env.OPENROUTER_API_KEY : "";
+  return { ...nextConfig, env: { ...nextConfig.env, ...(devKey ? { DEV_OPENROUTER_KEY: devKey } : {}) } };
+};

@@ -23,11 +23,18 @@ export async function setSecret(name: string, value: string | null): Promise<voi
 
 export async function getSecret(name: string): Promise<string | null> {
   const box = await idb.get<{ iv: Uint8Array; ct: ArrayBuffer }>(`secret:${name}`);
-  if (!box) return null;
+  if (!box) return devSecret(name);
   try {
     const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: box.iv }, await key(), box.ct);
     return new TextDecoder().decode(pt);
   } catch {
     return null;
   }
+}
+
+// Local development only: next.config.mjs defines DEV_OPENROUTER_KEY for `next dev` when frontend/.env.local sets
+// OPENROUTER_API_KEY. Builds never define it.
+function devSecret(name: string): string | null {
+  if (process.env.NODE_ENV !== "development" || name !== "openrouter") return null;
+  return process.env.DEV_OPENROUTER_KEY || null;
 }
